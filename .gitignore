@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+.DS_Store
+*.log
+.idea/
+.vscode/
+coverage/
+.turbo/
+.next/
+*.tsbuildinfo
+.claude/settings.local.json

@@ -1,0 +1,40 @@
+name: "Rondo Runner"
+description: "Scan the tickets directory, evaluate eligibility, dispatch background agents."
+author: "Rondo"
+branding:
+  icon: "rotate-cw"
+  color: "blue"
+
+inputs:
+  dry-run:
+    description: "Log eligible tickets without launching agents."
+    required: false
+    default: "false"
+  tickets-dir:
+    description: "Directory (relative to repo root) that contains ticket .md files."
+    required: false
+    default: "tickets"
+  branch-prefix:
+    description: "Prefix for branches the runner creates (e.g. 'rondo/' yields 'rondo/<slug>'). Must end with '/'."
+    required: false
+    default: "rondo/"
+  base-branch:
+    description: "Branch the agent PRs target (and which ticket branches are cut from)."
+    required: false
+    default: "main"
+  agent-backend:
+    description: "Which agent backend the runner dispatches to. Shipped adapters: cursor-api (default), http. Values claude-code-remote and codex-cloud are reserved but have no shipped adapter — use http and forward from your own receiver, or write a dedicated adapter per action/src/adapters/CONTRACT.md."
+    required: false
+    default: "cursor-api"
+  accepted-models:
+    description: "Comma-separated allowlist of model identifiers this runner will accept, in addition to 'default'. Empty means accept any."
+    required: false
+    default: ""
+  http-url:
+    description: "Required when agent-backend = http. URL the runner POSTs dispatch payloads to."
+    required: false
+    default: ""
+
+runs:
+  using: "node20"
+  main: "src/index.mjs"

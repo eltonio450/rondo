@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/eltonio450/rondo/main/schemas/ticket.schema.json",
+  "title": "Rondo ticket frontmatter",
+  "description": "Schema for the frontmatter block at the top of a Rondo ticket .md file. Applies to the parsed key:value pairs before the first blank line of the file. Body content is not validated by this schema.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["owner", "priority", "model"],
+  "properties": {
+    "owner": {
+      "type": "string",
+      "description": "GitHub username of the human reviewer assigned to this ticket.",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
+    },
+    "priority": {
+      "type": "integer",
+      "description": "Dispatch order. Lower numbers dispatch first. Ties break by filename lexical order.",
+      "minimum": 0,
+      "maximum": 99
+    },
+    "model": {
+      "type": "string",
+      "description": "Agent model identifier. 'default' is always accepted. Backend-specific aliases depend on the runner.",
+      "minLength": 1
+    },
+    "depends": {
+      "type": "string",
+      "description": "Comma-separated list of ticket slugs or filenames this ticket depends on. The ticket is ineligible while any listed dependency still exists as a file in <ticketsDir>.",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}(?:\\.md)?(?:\\s*,\\s*[a-z0-9][a-z0-9-]{0,62}(?:\\.md)?)*$"
+    },
+    "paused": {
+      "description": "Pause directive. `true` pauses indefinitely. An ISO date (YYYY-MM-DD) pauses until that date.",
+      "oneOf": [
+        { "type": "boolean", "const": true },
+        { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+      ]
+    },
+    "spec": {
+      "type": "string",
+      "description": "Optional spec version pin (e.g. '0.1'). If absent, the latest spec version the runner implements is assumed.",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    }
+  }
+}

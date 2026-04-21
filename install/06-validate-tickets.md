@@ -14,7 +14,7 @@ Why this default: the validator reuses the runner's own `frontmatter.mjs` + `sch
 
 ## Questions to ask the human
 
-1. *"Pin the validator to which `eltonio450/rondo` ref? (default: `v0.1` — the tag shipped with this brick; `main` for bleeding-edge)"*
+1. *"Pin the validator to which `eltonio450/rondo` ref? (default: `v0.2` — the tag shipped with this brick; `main` for bleeding-edge)"*
 2. *"Trigger on every PR, or only on PRs touching `<ticketsDir>/**`? (default: only those paths — cheaper CI)"*
 
 ## Steps
@@ -44,7 +44,7 @@ Why this default: the validator reuses the runner's own `frontmatter.mjs` + `sch
            uses: actions/checkout@v4
            with:
              repository: eltonio450/rondo
-             ref: v0.1
+             ref: v0.2
              path: .rondo
          - uses: actions/setup-node@v4
            with:
@@ -62,7 +62,7 @@ Why this default: the validator reuses the runner's own `frontmatter.mjs` + `sch
 - **Standalone script copied into the host repo.** `scripts/validate-tickets.mjs` duplicates `frontmatter.mjs` + schema enforcement locally. Trade-off: autonomous, no external checkout at CI time, but drifts from the Rondo spec as it evolves.
 - **Pre-commit hook (husky / lefthook).** Runs on `git commit` before CI. Faster feedback loop. Downside: easy to bypass with `--no-verify`; should combine with the CI, not replace it.
 - **Validate on `push` to the default branch.** Only catches mistakes post-merge — too late for merge-blocking. Not recommended.
-- **Validate the host repo's workflow file against the Rondo action inputs.** Not shipped in v0.1 — `action.yml` is the contract and GitHub Actions already fails fast on unknown `with:` keys.
+- **Validate the host repo's workflow file against the Rondo action inputs.** Not shipped in v0.2 — `action.yml` is the contract and GitHub Actions already fails fast on unknown `with:` keys.
 
 ## Self-check
 

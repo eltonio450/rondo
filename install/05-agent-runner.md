@@ -27,6 +27,8 @@ In each case below, edit `.github/workflows/rondo.yml` (created by Brick 4) to k
 
 ### If `cursor-api` (default)
 
+**Prerequisite (tell the human, do not attempt yourself):** the **Cursor GitHub App** must be installed on this repository. The adapter dispatches with `openAsCursorGithubApp: true` (see [`action/src/adapters/cursor-api.mjs`](../action/src/adapters/cursor-api.mjs)); without the App installed, the first dispatch silently fails to open a PR and you only notice at the next cycle. Verify at **https://github.com/apps/cursor-agent** → *Configure* → add this repo. If the human is not an admin on the repo, they need to ask one.
+
 1. The workflow's `with:` block already has `agent-backend: "cursor-api"` as the default — no change needed unless you previously set something else. The `env:` block should contain:
 
    ```yaml
@@ -45,7 +47,7 @@ In each case below, edit `.github/workflows/rondo.yml` (created by Brick 4) to k
 
 ### If `claude-code-remote` or `codex-cloud`
 
-> **⚠ No adapter is shipped for these backends in v0.1.** Setting `agent-backend: "claude-code-remote"` or `"codex-cloud"` directly will crash the runner (see [`action/src/index.mjs`](../action/src/index.mjs), which explicitly throws for these values).
+> **⚠ No adapter is shipped for these backends in v0.2.** Setting `agent-backend: "claude-code-remote"` or `"codex-cloud"` directly will crash the runner (see [`action/src/index.mjs`](../action/src/index.mjs), which explicitly throws for these values).
 >
 > Two options:
 > 1. **Use the `http` backend below** and have your own receiver forward dispatches to Claude Code remote or Codex Cloud. This is the recommended path today.
@@ -72,7 +74,7 @@ In each case below, edit `.github/workflows/rondo.yml` (created by Brick 4) to k
 
 ## Alternatives (documented, not implemented by default)
 
-- **Per-user Cursor tokens** — each ticket's `owner:` frontmatter maps to that user's `CURSOR_API_KEY_<GH_USER>` secret, so usage is billed to the right dev. Nice for cost attribution and fair-share. Not implemented in v0.1; easy addition to the Cursor adapter (read secret name from `owner`).
+- **Per-user Cursor tokens** — each ticket's `owner:` frontmatter maps to that user's `CURSOR_API_KEY_<GH_USER>` secret, so usage is billed to the right dev. Nice for cost attribution and fair-share. Not implemented in v0.2; easy addition to the Cursor adapter (read secret name from `owner`).
 - **Claude.ai web (Projects / Agents)** — no public API as of today; would need a browser-automation adapter (Playwright in a GH Action). Brittle, not recommended, not implemented.
 - **Twill** — if you're running Twill as your "agent fleet manager", point Rondo at Twill's dispatch endpoint via the `http` backend. Not a dedicated adapter yet, but the HTTP contract is enough.
 - **Self-hosted model (Ollama, vLLM, …)** — use the `http` backend to call your own inference endpoint. The agent side (clone repo, edit files, push branch, open PR) is on you. Not trivial.

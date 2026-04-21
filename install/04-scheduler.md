@@ -6,7 +6,7 @@ Fires the runner on a cadence **and** configures every runtime knob in the same 
 
 ## Default we ship
 
-**A GitHub Action on an hourly cron.** The workflow lives at `.github/workflows/rondo.yml` in the host repo and calls the reusable action `eltonio450/rondo/action@v0.1`.
+**A GitHub Action on an hourly cron.** The workflow lives at `.github/workflows/rondo.yml` in the host repo and calls the reusable action `eltonio450/rondo/action@v0.2`.
 
 Why this default:
 - You already use GitHub Actions. No new infra to host.
@@ -55,7 +55,7 @@ Why this default:
        timeout-minutes: 15
        steps:
          - uses: actions/checkout@v4
-         - uses: eltonio450/rondo/action@v0.1
+         - uses: eltonio450/rondo/action@v0.2
            with:
              dry-run: ${{ inputs.dry_run }}
              tickets-dir: <ticketsDir>
@@ -91,13 +91,13 @@ Why this default:
 - **Different cron cadence** — every 15 min, every 4 hours, weekdays only. Already supported — just edit the `cron:` line.
 - **Webhook-triggered runner** — fire on `push` to `main` so the runner scans as soon as a ticket is committed. Useful for teams that want near-real-time dispatch. Trivial to add: change the `on:` block. Caveat: still serialize via `concurrency:`.
 - **Manual-only runner** — drop `schedule:`, keep `workflow_dispatch:`. For teams piloting Rondo who want to dispatch by hand at first.
-- **External cron (not GitHub Actions)** — a cron job on your own infra that calls the runner script directly. Requires packaging the runner as an npm binary (not shipped as such in v0.1; the reusable Action is the contract).
+- **External cron (not GitHub Actions)** — a cron job on your own infra that calls the runner script directly. Requires packaging the runner as an npm binary (not shipped as such in v0.2; the reusable Action is the contract).
 - **Event-driven runner via GitHub Apps** — a dedicated Rondo GitHub App listening to `push` / `pull_request` events. Tighter coupling, no Actions minutes used. Not implemented; meaningful complexity to operate an App.
 - **Long-running worker (Kubernetes, ECS, Twill)** — a permanent process watching the repo. Eliminates cron startup latency; costs more to operate. Not implemented.
 
 ## Self-check
 
-- [ ] `.github/workflows/rondo.yml` exists and references `eltonio450/rondo/action@v0.1`.
+- [ ] `.github/workflows/rondo.yml` exists and references `eltonio450/rondo/action@v0.2`.
 - [ ] The cron matches the human's chosen cadence.
 - [ ] The `concurrency:` block is present.
 - [ ] `tickets-dir` and `base-branch` in the `with:` block match the human's answers.

@@ -1,6 +1,6 @@
 # INSTALL — modular menu for an AI agent
 
-> **v0.1 — adapter status.**
+> **v0.2 — adapter status.**
 > The runner's environment-independent pieces are complete: orchestrator, eligibility, frontmatter, registry Issue, GitHub REST client, validator CLI. The only place installation choice matters is the **adapter** — the file that dispatches a background agent. Two adapters ship:
 > - **`cursor-api`** — targets Cursor's Background Agents API (`POST /v0/agents`). Payload mirrors the dashboard "Copy API payload" shape. This is the default.
 > - **`http`** — generic: POSTs a JSON dispatch payload to a URL you control and expects `{ agentId, branchName }` back. Use this when your backend doesn't have a dedicated adapter yet — run a small receiver that forwards to Claude Code remote, Codex Cloud, Twill, a self-hosted model, etc.
@@ -48,7 +48,12 @@ The 6 core bricks are what you need. The optional brick is quality-of-life.
    - Does `.github/workflows/rondo.yml` exist?
    - Does `rondo.prompt.md` exist at the repo root?
    - Does an Issue with label `rondo-registry` exist?
-5. If any of the above exist, **ask the human whether to continue (update/merge) or abort** before touching anything.
+5. If any of the above exist, **ask the human whether to continue or abort** before touching anything. "Continue" means:
+   - **Existing `tickets/` dir** — leave user files alone; only seed `example.md` if the directory is empty (Brick 1 handles this).
+   - **Existing `.github/workflows/rondo.yml`** — show the human the current content side-by-side with Brick 4's target, ask which `with:` keys to update. Never overwrite wholesale.
+   - **Existing `rondo.prompt.md`** — do not touch unless the human explicitly opts in via Brick 2.
+   - **Existing `rondo-registry` Issue** — keep it; the runner will rewrite the body on its next cycle.
+   - **Legacy `rondo:status:*` labels from pre-v0.1 installs** — leave them, they're harmless noise; point the human at `install/99-uninstall.md` if they want a cleanup.
 
 ---
 
@@ -97,15 +102,27 @@ For each brick the human picked, open the corresponding file under [`install/`](
    Installed via INSTALL.md.
    ```
 
-3. Print this message verbatim to the human:
+3. **Smoke-test the install before declaring success.** After the human has set the secret(s) from Brick 5, run the workflow in dry-run mode to catch any wiring mistake without dispatching real agents:
 
-   > ✅ Rondo bricks installed: `<list>`.
+   ```bash
+   gh workflow run rondo.yml -f dry_run=true
+   # wait for the run to complete, then check the log:
+   gh run list --workflow=rondo.yml --limit 1 --json databaseId --jq '.[0].databaseId' \
+     | xargs -I{} gh run view {} --log
+   ```
+
+   Look for a line containing `cycle done — dispatched 0, skipped <N>, failed 0`. If you see `failed > 0` or the run errors out, inspect the log — common causes: missing `CURSOR_API_KEY` secret, Cursor GitHub App not installed on the repo (Brick 5 prereq), malformed `<ticketsDir>` path, or `GH_TOKEN` missing `issues: write` permission.
+
+   If the human prefers, they can run this themselves instead — print the commands.
+
+4. Print this message verbatim to the human:
+
+   > ✅ Rondo bricks installed: `<list>`. Smoke-test passed (`cycle done` with 0 failures).
    >
    > Next:
-   > 1. Run any `gh secret set ...` commands printed during the install.
-   > 2. Edit a ticket file in `<ticketsDir>/` and describe a real piece of work.
-   > 3. Push this commit. The scheduler fires on its configured cadence; trigger it early via **Actions → Rondo Runner → Run workflow**.
-   > 4. Watch the Issues tab — a single Issue with label `rondo-registry` will appear, and its body will list every ticket currently on the queue.
+   > 1. Edit a ticket file in `<ticketsDir>/` and describe a real piece of work.
+   > 2. Push this commit. The scheduler fires on its configured cadence; trigger it early via **Actions → Rondo Runner → Run workflow** (uncheck dry-run this time).
+   > 3. Watch the Issues tab — a single Issue with label `rondo-registry` will appear, and its body will list every ticket currently on the queue.
    >
    > Docs: <repo URL>/blob/<base-branch>/README.md
 

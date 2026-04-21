@@ -55,7 +55,7 @@ If you're migrating from a legacy install (pre-registry-Issue design): the old p
 
 ## Alternatives
 
-None shipped. The registry Issue is the only persistence mechanism Rondo v0.1 uses — a single small piece of state. If you want to move it elsewhere (Supabase, a KV store, a flat file in the repo), you'd need to rewrite [`action/src/core/registry.mjs`](../action/src/core/registry.mjs) and [`action/src/vcs/gh-client.mjs`](../action/src/vcs/gh-client.mjs) to talk to your backend. Before doing that, consider: the body is ~N lines for N live tickets. You probably don't have a performance problem.
+None shipped. The registry Issue is the only persistence mechanism Rondo v0.2 uses — a single small piece of state. If you want to move it elsewhere (Supabase, a KV store, a flat file in the repo), you'd need to rewrite [`action/src/core/registry.mjs`](../action/src/core/registry.mjs) and [`action/src/vcs/gh-client.mjs`](../action/src/vcs/gh-client.mjs) to talk to your backend. Before doing that, consider: the body is ~N lines for N live tickets. You probably don't have a performance problem.
 
 ## Self-check
 

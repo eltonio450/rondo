@@ -45,7 +45,7 @@ Each skill is one `SKILL.md` file. Where it goes depends on what the host repo a
 
 ## Alternatives (documented, not implemented by default)
 
-- **A dedicated VS Code / JetBrains extension** — packages the skills as first-class commands with keybindings. Not planned for v0.1.
+- **A dedicated VS Code / JetBrains extension** — packages the skills as first-class commands with keybindings. Not planned for v0.2.
 - **Continue.dev / Aider / other AI-IDE integrations** — if a host uses one of these, the skills can be mirrored into its conventional prompts folder. Not automated; the human does it by hand.
 - **Skill-as-service** — a shared Rondo server that serves skills to all installed repos via a URL, enabling central updates. Bad fit for an MIT OSS tool; not planned.
 

@@ -1,4 +1,4 @@
-# Rondo Specification v0.1
+# Rondo Specification v0.2
 
 > Normative. Last updated: 2026-04-21.
 
@@ -163,7 +163,7 @@ Entries in the mapping reflect the **last branch a dispatched agent was launched
 
 ### 6.4 No labels, no per-ticket Issues
 
-Rondo v0.1 does **not** maintain any `rondo:status:*`, `rondo:paused`, or `rondo` labels on per-ticket Issues. The only label involved is `rondo-registry` on the single registry Issue. Ticket state is derived every cycle from the filesystem and the repo's open PRs.
+Rondo v0.2 does **not** maintain any `rondo:status:*`, `rondo:paused`, or `rondo` labels on per-ticket Issues. The only label involved is `rondo-registry` on the single registry Issue. Ticket state is derived every cycle from the filesystem and the repo's open PRs.
 
 ## 7. PR conventions
 

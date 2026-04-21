@@ -54,7 +54,7 @@ This is implemented in [`action/src/lib/prompt-loader.mjs`](../action/src/lib/pr
 
 ## Alternatives (documented, not implemented by default)
 
-- **Per-ticket prompt override** — a ticket could carry a `prompt:` frontmatter key pointing to a custom prompt file. Useful for experimental tickets. Not in v0.1; open a PR if you want this.
+- **Per-ticket prompt override** — a ticket could carry a `prompt:` frontmatter key pointing to a custom prompt file. Useful for experimental tickets. Not in v0.2; open a PR if you want this.
 - **Prompt-as-code** — load the prompt from a JS/TS function so it can be templated with ticket metadata. Risk: drift from the canonical Markdown form. Not implemented.
 - **Prompt served from a remote URL** — fetched at dispatch time. Useful for orgs with central prompt governance. Not implemented; easy to add as an `INPUT_PROMPT_URL` action input in a follow-up.
 - **Rename the convention file** — if `rondo.prompt.md` clashes with something in your repo, the only way today is to fork the action and edit `prompt-loader.mjs`. Deliberate — keeping the convention name fixed is the whole point of "no config".

@@ -8,7 +8,7 @@ Drops small instruction files ("skills") into the repo so Cursor / Claude Code u
 
 Three skills, as Markdown files:
 
-- **`rondo-install`** — point of entry to (re-)install or modify Rondo in this repo *after* the first install. Pins the INSTALL.md version (`v0.2`), inlines the critical guardrails (no secrets, no PR, no pre-flight skip), and gives the agent a stable named handle for later interventions (add Brick 6 three months on, run uninstall, etc.). Not a simple wrapper around [`INSTALL.md`](../INSTALL.md) — it's the maintenance interface.
+- **`rondo-install`** — point of entry to (re-)install or modify Rondo in this repo *after* the first install. Pins the INSTALL.md version (`v0.3`), inlines the critical guardrails (no secrets, no PR, no pre-flight skip), and gives the agent a stable named handle for later interventions (add Brick 6 three months on, run uninstall, etc.). Not a simple wrapper around [`INSTALL.md`](../INSTALL.md) — it's the maintenance interface.
 - **`rondo-author-ticket`** — helps a human turn an informal ask into a well-formed ticket (frontmatter + Mission + Steps + empty Decisions / Progress sections).
 - **`rondo-resume-ticket`** — helps an agent (or a human) pick up a stalled ticket cleanly — re-read the decisions log, identify the next concrete step, ignore stale scope.
 
@@ -45,7 +45,7 @@ Each skill is one `SKILL.md` file. Where it goes depends on what the host repo a
 
 ## Alternatives (documented, not implemented by default)
 
-- **A dedicated VS Code / JetBrains extension** — packages the skills as first-class commands with keybindings. Not planned for v0.2.
+- **A dedicated VS Code / JetBrains extension** — packages the skills as first-class commands with keybindings. Not planned for v0.3.
 - **Continue.dev / Aider / other AI-IDE integrations** — if a host uses one of these, the skills can be mirrored into its conventional prompts folder. Not automated; the human does it by hand.
 - **Skill-as-service** — a shared Rondo server that serves skills to all installed repos via a URL, enabling central updates. Bad fit for an MIT OSS tool; not planned.
 

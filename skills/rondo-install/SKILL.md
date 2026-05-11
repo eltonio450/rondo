@@ -9,7 +9,7 @@ You are going to install [Rondo](https://github.com/eltonio450/rondo) in the cur
 
 ## What to do
 
-1. Read [`INSTALL.md`](../../INSTALL.md) at the repo root of the Rondo source. If this skill was installed into the host repo as a standalone file, fetch `INSTALL.md` directly from the upstream Rondo repo at the same pin the scheduler brick uses — `https://github.com/eltonio450/rondo/blob/v0.2/INSTALL.md` — so the install steps stay aligned with the action version. Rondo is not vendored into the host repo by the install.
+1. Read [`INSTALL.md`](../../INSTALL.md) at the repo root of the Rondo source. If this skill was installed into the host repo as a standalone file, fetch `INSTALL.md` directly from the upstream Rondo repo at the same pin the scheduler brick uses — `https://github.com/eltonio450/rondo/blob/v0.3/INSTALL.md` — so the install steps stay aligned with the action version. Rondo is not vendored into the host repo by the install.
 2. Follow it **to the letter**. It contains:
    - A mandatory pre-flight checklist.
    - A menu of 7 bricks the user chooses from.

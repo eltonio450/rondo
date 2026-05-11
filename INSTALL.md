@@ -1,6 +1,6 @@
 # INSTALL — modular menu for an AI agent
 
-> **v0.2 — adapter status.**
+> **v0.3 — adapter status.**
 > The runner's environment-independent pieces are complete: orchestrator, eligibility, frontmatter, registry Issue, GitHub REST client, validator CLI. The only place installation choice matters is the **adapter** — the file that dispatches a background agent. Two adapters ship:
 > - **`cursor-api`** — targets Cursor's Background Agents API (`POST /v0/agents`). Payload mirrors the dashboard "Copy API payload" shape. This is the default.
 > - **`http`** — generic: POSTs a JSON dispatch payload to a URL you control and expects `{ agentId, branchName }` back. Use this when your backend doesn't have a dedicated adapter yet — run a small receiver that forwards to Claude Code remote, Codex Cloud, Twill, a self-hosted model, etc.

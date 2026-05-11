@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseRegistry, renderRegistry, REGISTRY_LABEL, REGISTRY_TITLE } from "../../action/src/core/registry.mjs";
 
-test("constants are exported with the v0.2 canonical values", () => {
+test("constants are exported with the v0.3 canonical values", () => {
   assert.equal(REGISTRY_LABEL, "rondo-registry");
   assert.equal(REGISTRY_TITLE, "[Rondo] Ticket registry");
 });

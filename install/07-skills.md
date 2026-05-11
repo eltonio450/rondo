@@ -6,11 +6,12 @@ Drops small instruction files ("skills") into the repo so Cursor / Claude Code u
 
 ## Default we ship
 
-Three skills, as Markdown files:
+Two skills, as Markdown files:
 
-- **`rondo-install`** — wraps [`INSTALL.md`](../INSTALL.md) so a human can say *"use the rondo-install skill"* and their agent does the right thing.
 - **`rondo-author-ticket`** — helps a human turn an informal ask into a well-formed ticket (frontmatter + Mission + Steps + empty Decisions / Progress sections).
 - **`rondo-resume-ticket`** — helps an agent (or a human) pick up a stalled ticket cleanly — re-read the decisions log, identify the next concrete step, ignore stale scope.
+
+> Note: there is no `rondo-install` skill. Its content would just be *"read [INSTALL.md](../INSTALL.md)"* — which the [README](../README.md) already tells the human to ask their agent to do.
 
 Each skill is one `SKILL.md` file. Where it goes depends on what the host repo already uses:
 
@@ -24,7 +25,7 @@ Each skill is one `SKILL.md` file. Where it goes depends on what the host repo a
 
 1. *"Which coding agents will humans use to author tickets? `cursor` · `claude-code` · `both` · `none`."*
 2. If `none`: skip this brick entirely.
-3. *"Install all three skills (recommended), or only a subset?"*
+3. *"Install both skills (recommended), or only one?"*
 
 ## Steps
 
@@ -32,14 +33,13 @@ Each skill is one `SKILL.md` file. Where it goes depends on what the host repo a
 2. For each skill the human chose, fetch its canonical content from the Rondo repo:
 
    ```
-   https://raw.githubusercontent.com/eltonio450/rondo/main/skills/rondo-install/SKILL.md
    https://raw.githubusercontent.com/eltonio450/rondo/main/skills/rondo-author-ticket/SKILL.md
    https://raw.githubusercontent.com/eltonio450/rondo/main/skills/rondo-resume-ticket/SKILL.md
    ```
 
    Write each into `<skill-dir>/<name>/SKILL.md`.
 
-3. If both Cursor and Claude Code are in use, symlink (or duplicate) the three skill directories into the second tool's expected location. Note to the human: symlinks keep them in sync; duplication avoids symlink pitfalls on Windows.
+3. If both Cursor and Claude Code are in use, symlink (or duplicate) the skill directories into the second tool's expected location. Note to the human: symlinks keep them in sync; duplication avoids symlink pitfalls on Windows.
 
 4. Tell the human how to invoke each skill from their agent — *"Type `/rondo-author-ticket` (Cursor) or ask your assistant 'use the rondo-author-ticket skill'."*
 

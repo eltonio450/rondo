@@ -8,7 +8,7 @@ Drops small instruction files ("skills") into the repo so Cursor / Claude Code u
 
 Three skills, as Markdown files:
 
-- **`rondo-install`** — wraps [`INSTALL.md`](../INSTALL.md) so a human can say *"use the rondo-install skill"* and their agent does the right thing.
+- **`rondo-install`** — point of entry to (re-)install or modify Rondo in this repo *after* the first install. Pins the INSTALL.md version (`v0.2`), inlines the critical guardrails (no secrets, no PR, no pre-flight skip), and gives the agent a stable named handle for later interventions (add Brick 6 three months on, run uninstall, etc.). Not a simple wrapper around [`INSTALL.md`](../INSTALL.md) — it's the maintenance interface.
 - **`rondo-author-ticket`** — helps a human turn an informal ask into a well-formed ticket (frontmatter + Mission + Steps + empty Decisions / Progress sections).
 - **`rondo-resume-ticket`** — helps an agent (or a human) pick up a stalled ticket cleanly — re-read the decisions log, identify the next concrete step, ignore stale scope.
 

@@ -1,77 +1,95 @@
-# `action/` — the Rondo runner
+# `action/` — reference Rondo runner
 
-> Reusable GitHub Action. The runner itself is environment-independent and complete; the only thing that varies by installation is the **adapter** — the file that dispatches one background agent against one ticket. See [`src/adapters/CONTRACT.md`](src/adapters/CONTRACT.md).
+This directory is the GitHub/Node 24 reference profile for the portable protocol in [`SPEC.md`](../SPEC.md). It is small enough to read and fork. It is not a hosted service and it is not the only valid Rondo architecture.
 
-## Layout
+## Responsibilities
 
+The reference runner:
+
+- scans a flat ticket directory;
+- derives eligibility from ticket files and open PRs;
+- orders tickets and applies a per-cycle attempt cap;
+- loads the bundled prompt plus an optional host prepend/override;
+- dispatches through one selected adapter with a timeout and idempotency key;
+- checkpoints actual branch mappings in one GitHub Issue;
+- emits a cycle summary and fails visibly on critical persistence errors.
+
+It does **not** run an agent locally, inspect provider state after dispatch, or verify that the resulting PR follows the prompt. Delivery is at least once.
+
+## Architecture
+
+```text
+action/src/index.mjs
+  ├─ config and Action environment
+  ├─ vcs/gh-client.mjs ───── GitHub VCS port
+  ├─ adapters/*.mjs ─────── remote-agent port
+  └─ core/runner.mjs
+       ├─ eligibility.mjs
+       ├─ registry.mjs
+       ├─ lib/frontmatter.mjs
+       └─ lib/prompt-loader.mjs
 ```
-action/
-  action.yml                       # composite/node action metadata
-  package.json                     # Node 20, no deps (uses built-in fetch)
-  src/
-    index.mjs                      # entry point (GitHub Actions runtime)
-    core/
-      runner.mjs                   # main dispatch loop (orchestrator)
-      eligibility.mjs              # pure: is a ticket eligible this cycle? (tested)
-      registry.mjs                 # pure: parse/render the registry Issue body (tested)
-    lib/
-      frontmatter.mjs              # pure: parse/serialize ticket frontmatter (tested)
-      prompt-loader.mjs            # loads PROMPT.md + optional host override
-    vcs/
-      gh-client.mjs                # thin GitHub REST wrapper
-    adapters/
-      CONTRACT.md                  # NORMATIVE — the dispatch contract
-      http.mjs                     # generic HTTP POST adapter (portable)
-      cursor-api.mjs               # Cursor Background Agents adapter
-    cli/
-      validate-tickets.mjs         # standalone CI validator for tickets/*.md (tested)
-```
 
-## What is and isn't environment-specific
-
-The runner draws a hard line between generic code (shipped complete) and team-specific code (contract + examples):
-
-| File | Environment-dependent? | Ships as |
+| Area | Role | Port boundary |
 |---|---|---|
-| `core/runner.mjs`, `core/eligibility.mjs`, `core/registry.mjs` | No — uses only adapter abstractions | **Complete** |
-| `lib/frontmatter.mjs`, `lib/prompt-loader.mjs` | No — pure logic from SPEC | **Complete + tested** |
-| `vcs/gh-client.mjs` | No — GitHub's REST API is stable | **Complete** |
-| `cli/validate-tickets.mjs` | No | **Complete + tested** |
-| `adapters/http.mjs` | No — HTTP POST is universal | **Complete** (portable reference) |
-| `adapters/cursor-api.mjs` | Yes — Cursor's API may drift | **Complete** (verified against current `/v0/agents`) |
-| `adapters/claude-code-remote.mjs`, `adapters/codex-cloud.mjs` | Yes | Not shipped — write per `CONTRACT.md` |
-| `index.mjs` | Barely — only the adapter switch | **Complete** |
+| `core/runner.mjs` | cycle orchestration and dispatch capacity | consumes VCS and adapter interfaces |
+| `core/eligibility.mjs` | pure eligibility predicate | portable protocol logic |
+| `core/registry.mjs` | registry JSON and human snapshot | storage-neutral body format, reference GitHub use |
+| `lib/frontmatter.mjs` | line-based ticket parsing | portable protocol logic |
+| `lib/prompt-loader.mjs` | bundled/host prompt composition | host convention |
+| `adapters/cursor-api.mjs` | Cursor Background Agents | provider-specific and expected to drift |
+| `adapters/http.mjs` | generic HTTPS dispatch | portable reference adapter |
+| `vcs/gh-client.mjs` | GitHub REST operations | VCS-specific |
+| `cli/validate-tickets.mjs` | strict author-time validation | CI/authoring tool |
 
-If you install with `agent-backend: "cursor-api"` (the default) or `agent-backend: "http"`, everything is off-the-shelf and should work as-is. For any other backend, you write one file (the adapter) that conforms to [`src/adapters/CONTRACT.md`](src/adapters/CONTRACT.md) and wire it into `index.mjs`.
+Read [`../ADAPT.md`](../ADAPT.md), [`src/adapters/CONTRACT.md`](src/adapters/CONTRACT.md), and [`src/vcs/CONTRACT.md`](src/vcs/CONTRACT.md) before replacing a boundary.
 
-## The adapter contract in one paragraph
+## Shipped backends
 
-An adapter exports `async dispatch({ repoFullName, ticketFile, suggestedBranch, baseBranch, model, prompt })` and returns `{ agentId, branchName }`. The runner passes `suggestedBranch` as a hint; the adapter returns the branch the backend actually chose (Cursor auto-generates; HTTP/custom can honor the hint). Throw on unrecoverable failure — the runner catches, logs it, and counts the ticket as `failed` for this cycle. Full spec in [`src/adapters/CONTRACT.md`](src/adapters/CONTRACT.md).
+- `cursor-api`: direct Cursor API call.
+- `http`: HTTPS POST to a receiver owned by the installing team.
 
-## Tests
+No dedicated Claude Code or Codex Cloud adapter is present. Adding a string to `agent-backend` is not enough; implement and test a port.
+
+## Safety controls
+
+- `max-dispatches-per-cycle`: `1..1000`, default `10`; failures consume a slot.
+- `request-timeout-seconds`: `1..3600`, default `120`.
+- `http-allow-insecure`: default `false`; cleartext HTTP requires explicit opt-in.
+- `Idempotency-Key`: deterministic SHA-256 correlation for the same repository, ticket path, and ticket content.
+- HTTP HMAC: when a secret is configured, timestamped HMAC-SHA256 headers allow receiver authentication and replay-window checks.
+- Registry checkpoint: a successful adapter result is persisted before another dispatch begins.
+- Dry-run: evaluates order and capacity without creating an adapter or requiring provider credentials.
+
+These controls reduce cost and duplicates; they do not provide exactly-once execution. A timed-out remote request may still complete.
+
+## Inputs
+
+[`action.yml`](action.yml) is the public Action-input contract. Keep it aligned with `readConfig()` in `src/index.mjs`, installation examples, and `SPEC.md §10`.
+
+Input environment names from GitHub Actions have historically appeared in hyphenated and underscore-normalized forms. Configuration parsing must remain covered by tests rather than assuming one spelling.
+
+## Development
+
+Requires Node 24.
 
 ```bash
-# from repo root:
-node --test 'internal/tests/*.test.mjs'
-
-# or from this directory:
+cd action
 npm test
 ```
 
-Tests live in [`../internal/tests/`](../internal/tests/) and cover the pure logic (eligibility, frontmatter, registry, validate-tickets). Integration tests against a real GitHub repo are out of scope for unit testing — use the `dry_run` workflow input to sanity-check a full cycle without dispatching.
+Tests are stored under [`../internal/tests/`](../internal/tests/). Pure logic and mocked network boundaries should be tested locally; a real-provider dispatch belongs in a controlled smoke environment, not the default unit suite.
 
-## Contracts the installing agent must not break
+Before changing a public boundary:
 
-These are the shapes the other bricks depend on. Change the internals freely; keep the boundaries.
+1. update the relevant contract/spec first or in the same change;
+2. add success, invalid-input, timeout, and failure-path tests;
+3. keep network effects injected or mocked;
+4. run the full Node 24 suite;
+5. update security and release notes when data or trust boundaries change.
 
-1. **Ticket eligibility** — `core/eligibility.mjs` default export takes `{ ticket, existingTicketSlugs, openPRs, today, branchName, acceptedModels }` and returns `{ eligible: boolean, reason: string }`. Follows [`SPEC.md §4`](../SPEC.md).
-2. **Frontmatter parse** — `lib/frontmatter.mjs :: parseFrontmatter(content)` returns `{ frontmatter, body }`. Follows [`SPEC.md §3.2`](../SPEC.md) — no YAML `---` fences; key:value per line until first blank line.
-3. **Registry** — `core/registry.mjs :: parseRegistry(body)` / `renderRegistry({ mapping, tickets, openPRs, now })` read/write the `<!-- rondo-registry ... -->` block. Follows [`SPEC.md §6.2`](../SPEC.md).
-4. **Adapter** — see [`src/adapters/CONTRACT.md`](src/adapters/CONTRACT.md).
+## Packaging and releases
 
-## What this action does NOT do
+The host workflow should reference `eltonio450/rondo/action@<RONDO_REF>`, where `<RONDO_REF>` is a reviewed immutable commit SHA. Do not document an unreleased tag as if it exists, and do not recommend `main` for production.
 
-- It does not bundle `node_modules`. Keep zero-dep; use `fetch`.
-- It does not persist state outside the single registry Issue it owns.
-- It does not commit anything to the host repo. Only the dispatched agent does.
-- It does not retry adapter dispatches — the adapter itself is responsible for transient retries; unrecoverable failures are logged and the ticket is counted as `failed` for the cycle.
+The Action has no runtime dependencies. Release checks must still verify that the checked-in source, `action.yml` runtime, package metadata, spec version, tests, and documentation agree.

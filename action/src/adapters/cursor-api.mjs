@@ -7,23 +7,59 @@
 //
 // Cursor's API does not carry arbitrary "context" fields, so we prepend a
 // small "Runtime inputs" block to the prompt text — that is how the dispatched
-// agent sees TICKET_FILE / BRANCH_NAME / BASE_BRANCH.
+// agent sees TICKET_FILE / BRANCH_NAME / BASE_BRANCH / IDEMPOTENCY_KEY.
 
 const CURSOR_API = "https://api.cursor.com/v0";
 
-export function createCursorAdapter({ apiKey, fetchImpl = globalThis.fetch }) {
-  if (!apiKey) throw new Error("Cursor adapter requires CURSOR_API_KEY.");
+import { fetchWithTimeout, readErrorBody, readJson } from "../lib/network.mjs";
+import {
+  assertNonEmptyString,
+  assertPositiveInteger,
+  assertValidAgentId,
+  assertValidBranchName,
+  assertValidIdempotencyKey,
+  assertValidModel,
+  assertValidRepoFullName,
+} from "../lib/validation.mjs";
+
+export function createCursorAdapter({
+  apiKey,
+  requestTimeoutMs = 120_000,
+  fetchImpl = globalThis.fetch,
+}) {
+  assertNonEmptyString(apiKey, "CURSOR_API_KEY");
+  assertPositiveInteger(requestTimeoutMs, "requestTimeoutMs");
 
   return {
     backend: "cursor-api",
 
-    async dispatch({ repoFullName, ticketFile, suggestedBranch, baseBranch, model, prompt }) {
+    async dispatch({
+      repoFullName,
+      ticketFile,
+      suggestedBranch,
+      baseBranch,
+      model,
+      prompt,
+      idempotencyKey,
+    }) {
+      assertValidRepoFullName(repoFullName);
+      assertNonEmptyString(ticketFile, "ticketFile");
+      assertValidBranchName(suggestedBranch, "suggestedBranch");
+      assertValidBranchName(baseBranch, "baseBranch");
+      assertValidModel(model, "model");
+      assertNonEmptyString(prompt, "prompt");
+      const validatedIdempotencyKey = assertValidIdempotencyKey(idempotencyKey);
+      if (!validatedIdempotencyKey) {
+        throw new Error("Cursor dispatch requires idempotencyKey.");
+      }
+
       const inputsHeader = [
         "## Runtime inputs",
         "",
         `- TICKET_FILE: ${ticketFile}`,
         `- BRANCH_NAME: ${suggestedBranch}`,
         `- BASE_BRANCH: ${baseBranch}`,
+        `- IDEMPOTENCY_KEY: ${validatedIdempotencyKey}`,
         "",
         "---",
         "",
@@ -43,27 +79,37 @@ export function createCursorAdapter({ apiKey, fetchImpl = globalThis.fetch }) {
       };
       if (model && model !== "default") payload.model = model;
 
-      const res = await fetchImpl(`${CURSOR_API}/agents`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
+      // Do not retry this POST: a response can be lost after Cursor has
+      // already created the agent.
+      const res = await fetchWithTimeout(
+        fetchImpl,
+        `${CURSOR_API}/agents`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          redirect: "error",
         },
-        body: JSON.stringify(payload),
-      });
+        { timeoutMs: requestTimeoutMs, label: "Cursor dispatch" },
+      );
 
       if (!res.ok) {
-        const text = await res.text();
+        const text = await readErrorBody(res);
         throw new Error(`Cursor dispatch failed (${res.status}): ${text}`);
       }
-      const data = await res.json();
+      const data = await readJson(res, "Cursor dispatch");
+      if (!data || typeof data !== "object" || Array.isArray(data)) {
+        throw new Error("Cursor dispatch returned a JSON value that is not an object.");
+      }
 
       const branchName = data.target?.branchName ?? suggestedBranch;
       const agentId = data.id;
-      if (!agentId) {
-        throw new Error(`Cursor dispatch succeeded but returned no agent id: ${JSON.stringify(data)}`);
-      }
-      return { agentId: String(agentId), branchName: String(branchName) };
+      assertValidAgentId(agentId, "Cursor dispatch response agentId");
+      assertValidBranchName(branchName, "Cursor dispatch response branchName");
+      return { agentId, branchName };
     },
   };
 }

@@ -1,40 +1,40 @@
 ---
 name: rondo-resume-ticket
-description: Pick up a stalled Rondo ticket cleanly. Re-reads the ticket's decisions log and progress history, identifies the next concrete step, and produces a clean PR. Invoke when a ticket has been paused, failed, or left mid-progress for more than one cycle.
+description: Resume or retire a stalled Rondo ticket safely, accounting for pauses, existing PRs, retries, and current repository reality.
 ---
 
-# rondo-resume-ticket
+# Resume a Rondo ticket
 
-You are going to resume a Rondo ticket that has stalled. The usual reasons: a pause has expired, a dispatch went stale without merging, or a previous agent left the ticket mid-step.
+Rondo dispatch is at least once. Before doing work, determine whether another dispatch or PR already exists. Never assume a timeout means the remote agent stopped.
 
-## Inputs
+## Reconstruct state
 
-- `TICKET_FILE` — path to the ticket `.md` under `<ticketsDir>/`.
+1. Read repository guidance and the complete target ticket: frontmatter, mission, steps, decisions, and progress.
+2. Inspect current base-branch code and recent relevant changes; ticket plans can become stale.
+3. Resolve the branch from the machine JSON block in the open Issue labelled `rondo-registry`. If no mapping exists, use the configured branch prefix (default `rondo/<slug>`).
+4. Search open PRs on that exact branch in the host repository. A same-named fork branch is not the same head.
+5. Inspect provider state when the last dispatch timed out or failed ambiguously.
 
-## Steps
+If an open, relevant PR already exists, do not start another step. Continue/review that work or report the inconsistency.
 
-1. **Read the ticket in full.** Pay special attention to:
-   - `## Decisions (newest first)` — the most recent entries tell you *why* things are where they are.
-   - `## Progress history (newest first)` — the most recent merged PRs tell you *what* is already shipped.
-   - `## Steps` — compare against Progress history. Which steps are already in prod? Which is next?
-2. **Check the frontmatter.**
-   - If `paused: <date>` is present and the date is **past or today** → remove the key (the pause has expired). Also strip any `[resume: <date>]` suffix from the first H1.
-   - If `paused: true` → **stop.** This ticket is paused indefinitely; a human must remove the key.
-3. **Resolve conflict with open PRs.** Look up this ticket's recorded branch in the registry Issue (label `rondo-registry`) — its JSON block maps `slug → branchName`. If no mapping exists yet, fall back to the convention `rondo/<slug>`. Then search for an open PR on that exact branch. If one exists and is mergeable, **do not start a new step** — the runner should have skipped this ticket. Flag to the user. (Note: some backends like Cursor auto-generate branch names such as `cursor/auto-<slug>-abc` — that's why the registry is the source of truth, not the `rondo/` prefix.)
-4. **Identify the next step.** Use the Progress history as ground truth: the next step is the first one in `## Steps` that hasn't been logged as merged.
-5. **Re-check the step is still relevant.** A lot may have changed since the ticket was written. If the step is obsolete, rewrite it and log the rewrite in Decisions.
-6. **Proceed as a normal Rondo cycle.** Follow [`PROMPT.md`](../../PROMPT.md) — choose one of the four outputs (Progress / Pause / Done / No-op), and always open exactly one PR.
+## Pause semantics
 
-## Signals that the ticket should be retired, not resumed
+- `paused: true`: stop unless a human explicitly authorizes unpause.
+- future `paused: YYYY-MM-DD`: stop until that date.
+- date today or earlier: remove the key and matching `[resume: DATE]` suffix before progressing.
+- `paused: false`: unpaused; remove it for clarity when editing.
 
-- The Mission is no longer relevant (the product pivoted, the bug is already fixed elsewhere).
-- Every step in `## Steps` is either already in Progress history or has been superseded.
-- The Decisions log contains a `YYYY-MM-DD — abandoning this ticket because X` entry that wasn't acted on.
+## Choose one outcome
 
-In those cases, choose output (c) Done: promote any durable knowledge into canonical docs, then delete the `.md` file.
+1. **Progress:** implement one reviewable next step; insert progress/decisions at the top; create or update the single matching PR touching the ticket.
+2. **Pause:** set a valid pause, record reason/trigger/owner, and create or update the single ticket-only PR.
+3. **Done:** promote durable knowledge, then remove or explicitly archive the ticket in the single matching PR.
+4. **No-op:** record blocker, need, and owner in the single ticket-only PR; do not repeat the same no-op indefinitely.
 
-## What you must NOT do
+Use the registry branch as head and configured base branch as target. Work on only this ticket. Ensure exactly one relevant PR exists—reuse it on retry—and remember that the runner does not verify this; your compliance preserves the protocol.
 
-- Do not rewrite the Mission silently. If you must re-scope, log it in Decisions with a dated entry.
-- Do not drop the Decisions or Progress history sections, even if they're long. They are the ticket's memory.
-- Do not open more than one PR.
+## Re-scope or retire
+
+Treat progress history and current code as evidence. If a step is obsolete, rewrite it and add a dated decision. Do not silently rewrite the mission. Retire the ticket when the mission is complete, no longer relevant, or fully superseded.
+
+Before handoff, report existing PR/provider checks, chosen outcome, changed scope, validation run, and remaining risk. Do not commit, push, close PRs, or mutate the registry unless explicitly authorized by the current task.

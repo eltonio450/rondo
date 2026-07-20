@@ -1,138 +1,178 @@
-# INSTALL — modular menu for an AI agent
+# Install Rondo — guided reference profile
 
-> **v0.3 — adapter status.**
-> The runner's environment-independent pieces are complete: orchestrator, eligibility, frontmatter, registry Issue, GitHub REST client, validator CLI. The only place installation choice matters is the **adapter** — the file that dispatches a background agent. Two adapters ship:
-> - **`cursor-api`** — targets Cursor's Background Agents API (`POST /v0/agents`). Payload mirrors the dashboard "Copy API payload" shape. This is the default.
-> - **`http`** — generic: POSTs a JSON dispatch payload to a URL you control and expects `{ agentId, branchName }` back. Use this when your backend doesn't have a dedicated adapter yet — run a small receiver that forwards to Claude Code remote, Codex Cloud, Twill, a self-hosted model, etc.
->
-> Adapters for `claude-code-remote` and `codex-cloud` are **not shipped** as dedicated files — use the `http` backend and forward from your own infra, or write one against the contract in [`action/src/adapters/CONTRACT.md`](action/src/adapters/CONTRACT.md).
+> Protocol v0.4, **Unreleased**. These instructions are for a coding agent working with a human in a host repository.
 
-> **You are an AI coding agent (Cursor, Claude Code, Codex, etc.) installing Rondo into the repository you have access to.**
-> Read this page first. It lists the **bricks** Rondo is made of. For each brick, there is a dedicated file in [`install/`](install/) with the detailed steps, the questions to ask the human, and the alternatives the human may prefer over the default.
->
-> **Working rules:**
-> - Run the pre-flight (below) first. Always.
-> - Ask the human which bricks to install before touching anything. Default recommendation for a first install: bricks 1–6 (5 core + ticket validator).
-> - Each brick file is **self-contained** and **idempotent** — re-running must not duplicate state.
-> - Do **not** set GitHub secrets yourself. Print the `gh secret set` commands; the human runs them.
-> - Do **not** open a PR for the install itself — commit on the current branch only.
+Rondo installation is a small set of reviewable repository changes plus optional GitHub-side setup. It is not a package install and it must respect the host repository's normal branch, review, and deployment policy.
 
----
+The reference profile uses:
 
-## What is Rondo made of?
+- GitHub Actions as scheduler;
+- one GitHub Issue as branch registry;
+- Cursor Background Agents or a generic HTTP receiver;
+- a separate ticket-validation workflow.
 
-Rondo is the composition of **six core bricks** plus one optional one (plus uninstall). There is **no separate config file** — every runtime knob is passed to the runner as an input in the `.github/workflows/rondo.yml` file the scheduler brick creates. The only optional companion file is `rondo.prompt.md` at the repo root, picked up automatically by convention if present.
+Dedicated Claude Code and Codex Cloud adapters are not shipped.
 
-| # | Brick | What it does | Default implementation | Alternatives (see brick file) |
-|---|---|---|---|---|
-| 1 | **Tickets directory** | Where `.md` tickets live in the repo | `tickets/` at repo root | Any directory; one per team; nested |
-| 2 | **Prompt** | The instructions passed to the dispatched agent | [`PROMPT.md`](PROMPT.md) bundled with the action | Per-repo override: drop `rondo.prompt.md` at the repo root (automatic, convention-based) |
-| 3 | **Registry Issue** | Where the `slug → branchName` lookup lives | **One long-lived GitHub Issue** labelled `rondo-registry`, body rewritten each cycle | — (labels and body are owned by the runner) |
-| 4 | **Scheduler** | When agents fire — and where every runtime knob is configured (via `with:`) | **GitHub Action on hourly cron** | Different cron, webhook-triggered, manual `workflow_dispatch`, external cron |
-| 5 | **Agent runner** | Which background coding agent actually does the work | **Cursor Background Agents API** (one shared `CURSOR_API_KEY` secret) | Claude Code remote, Codex Cloud, Claude.ai web, Twill, per-user Cursor tokens, custom HTTP endpoint |
-| 6 | **Ticket validation (CI)** | Blocks merge of PRs with malformed ticket files | GitHub Actions workflow invoking `action/src/cli/validate-tickets.mjs` | Standalone script copied in-repo; pre-commit hook |
-| 7 | *Skills (optional)* | Helpers for humans authoring tickets from their IDE | Cursor + Claude Code skill files | Skip if team uses neither |
-| — | *Uninstall* | Removes Rondo from the repo | Delete workflows; optionally delete tickets + close the registry Issue | — |
+## Non-negotiable rules
 
-The 6 core bricks are what you need. The optional brick is quality-of-life.
+1. Discover the environment before changing anything.
+2. Read every selected brick completely before applying it.
+3. Preserve user files and unrelated work; never overwrite a workflow or prompt silently.
+4. Never write, print, inspect, or set a secret value. Give the human the secret command instead.
+5. Do not bypass branch protection. Installation may and usually should go through a PR.
+6. Do not trigger a workflow until the workflow file has been pushed and, where required, merged to the default branch.
+7. Pin Rondo to `<RONDO_REF>`, a reviewed immutable 40-character commit SHA. Do not substitute `main` or assume a `v0.4` tag exists.
+8. Pin third-party Actions to reviewed immutable SHAs when the host policy requires supply-chain pinning.
+9. Do not claim exactly-once dispatch or PR verification. The reference runner is at least once.
+10. Stop before destructive or external mutations that the human has not approved.
 
----
+## Phase 1 — Discover the host
 
-## Pre-flight (always run, first)
+Run read-only checks first and summarize the result to the human:
 
-1. Confirm you are at the repository root. If not, `cd` there.
-2. Confirm `gh` CLI is authenticated: `gh auth status`. If not, **stop** and ask the human to run `gh auth login`.
-3. Detect the default branch name: `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`. Remember it — several bricks need it.
-4. Detect the existing Rondo footprint:
-   - Does `tickets/` (or a custom tickets directory — ask if unsure) exist?
-   - Does `.github/workflows/rondo.yml` exist?
-   - Does `rondo.prompt.md` exist at the repo root?
-   - Does an Issue with label `rondo-registry` exist?
-5. If any of the above exist, **ask the human whether to continue or abort** before touching anything. "Continue" means:
-   - **Existing `tickets/` dir** — leave user files alone; only seed `example.md` if the directory is empty (Brick 1 handles this).
-   - **Existing `.github/workflows/rondo.yml`** — show the human the current content side-by-side with Brick 4's target, ask which `with:` keys to update. Never overwrite wholesale.
-   - **Existing `rondo.prompt.md`** — do not touch unless the human explicitly opts in via Brick 2.
-   - **Existing `rondo-registry` Issue** — keep it; the runner will rewrite the body on its next cycle.
-   - **Legacy `rondo:status:*` labels from pre-v0.1 installs** — leave them, they're harmless noise; point the human at `install/99-uninstall.md` if they want a cleanup.
-
----
-
-## Ask the human which bricks to install
-
-Present this menu verbatim. Wait for the human's answer before running anything. The human may pick any subset — and can re-run any brick later.
-
-```
-[ ] 1. Tickets directory      — install/01-tickets-dir.md
-[ ] 2. Prompt                 — install/02-prompt.md
-[ ] 3. Registry Issue         — install/03-state-store.md
-[ ] 4. Scheduler              — install/04-scheduler.md
-[ ] 5. Agent runner           — install/05-agent-runner.md
-[ ] 6. Ticket validation (CI) — install/06-validate-tickets.md
-[ ] 7. Skills (optional)      — install/07-skills.md
-[ ] —  Uninstall              — install/99-uninstall.md
-
-Recommended first install: 1 + 2 + 3 + 4 + 5 + 6.
-```
-
----
-
-## Run each chosen brick in order
-
-For each brick the human picked, open the corresponding file under [`install/`](install/), read it in full, and execute it. Each brick file follows the same shape:
-
-1. **What it does** — one line.
-2. **Default we ship** — the reference choice and why.
-3. **Questions to ask the human** — present verbatim, record answers.
-4. **Steps** — the idempotent commands to run or files to write.
-5. **Alternatives** — the other implementations you can wire instead. Only documented; not shipped as code today.
-6. **Self-check** — confirm the brick is installed before moving on.
-
-**Order matters** only in that Brick 1 (tickets dir) should precede Bricks 2–5 (they reference the directory name), and Brick 4 (Scheduler) should run before Brick 5 (Agent runner) adds backend-specific env vars to the workflow file created by Brick 4. Brick 6 (validation) can run anytime after Brick 1. Optional brick 7 can run anytime after the core set.
-
----
-
-## When all chosen bricks are installed
-
-1. Stage only the files you created or modified.
-2. Commit with:
-
-   ```
-   chore(rondo): install bricks <list>
-
-   Installed via INSTALL.md.
-   ```
-
-3. **Smoke-test the install before declaring success.** After the human has set the secret(s) from Brick 5, run the workflow in dry-run mode to catch any wiring mistake without dispatching real agents:
+1. Confirm repository root and inspect `git status --short --branch`. Do not disturb existing changes.
+2. Inspect repository guidance: `AGENTS.md`, `CONTRIBUTING.md`, security policy, workflow conventions, branch rules, and existing package/runtime files.
+3. Determine the GitHub repository and default branch. Prefer local Git metadata; if available, confirm with:
 
    ```bash
-   gh workflow run rondo.yml -f dry_run=true
-   # wait for the run to complete, then check the log:
-   gh run list --workflow=rondo.yml --limit 1 --json databaseId --jq '.[0].databaseId' \
-     | xargs -I{} gh run view {} --log
+   gh auth status
+   gh repo view --json nameWithOwner,defaultBranchRef --jq '{repo: .nameWithOwner, default: .defaultBranchRef.name}'
    ```
 
-   Look for a line containing `cycle done — dispatched 0, skipped <N>, failed 0`. If you see `failed > 0` or the run errors out, inspect the log — common causes: missing `CURSOR_API_KEY` secret, Cursor GitHub App not installed on the repo (Brick 5 prereq), malformed `<ticketsDir>` path, or `GH_TOKEN` missing `issues: write` permission.
+4. Discover the existing Rondo footprint:
 
-   If the human prefers, they can run this themselves instead — print the commands.
+   - candidate ticket directories;
+   - `.github/workflows/rondo.yml` and validation workflows;
+   - `rondo.prompt.md`;
+   - installed Rondo skills;
+   - an open Issue labelled `rondo-registry`;
+   - legacy `rondo:*` labels or workflows.
 
-4. Print this message verbatim to the human:
+5. Discover delivery constraints:
 
-   > ✅ Rondo bricks installed: `<list>`. Smoke-test passed (`cycle done` with 0 failures).
-   >
-   > Next:
-   > 1. Edit a ticket file in `<ticketsDir>/` and describe a real piece of work.
-   > 2. Push this commit. The scheduler fires on its configured cadence; trigger it early via **Actions → Rondo Runner → Run workflow** (uncheck dry-run this time).
-   > 3. Watch the Issues tab — a single Issue with label `rondo-registry` will appear, and its body will list every ticket currently on the queue.
-   >
-   > Docs: <repo URL>/blob/<base-branch>/README.md
+   - can the current branch be pushed directly, or is a PR required?
+   - who can create labels, install GitHub Apps, set Actions secrets, and require checks?
+   - are external Actions allowed and must they be SHA-pinned?
+   - may workflows send repository metadata and prompts to the selected agent provider?
+   - is cleartext HTTP prohibited? It is disabled by Rondo by default.
 
----
+If Rondo artifacts already exist, show the current and proposed configuration and ask whether to adopt, update, or abort. Do not replace them wholesale.
 
-## What you must NOT do
+## Phase 2 — Collect decisions once
 
-- Do **not** set GitHub secrets yourself (the human must).
-- Do **not** open any PR as part of the install — only commit on the current branch.
-- Do **not** modify any pre-existing workflow file other than the new `rondo*.yml` files.
-- Do **not** silently overwrite `tickets/` or `rondo.prompt.md` — always ask first.
-- Do **not** add host-repo npm dependencies. The runner lives in a reusable GitHub Action; nothing is installed on the host machine.
-- Do **not** invent bricks that are not in this list. If the human asks for something exotic (a new state store, a new runner), point them at the alternatives section of the relevant brick file and offer to stub a PR against the Rondo repo instead.
+Ask the human for the following choices in one concise message:
+
+| Decision | Recommended default |
+|---|---|
+| Bricks | 1–6; add 7 only if skills are useful |
+| Ticket directory | `tickets` |
+| Base branch | detected repository default |
+| Schedule | manual-only for pilot; hourly after validation |
+| Backend | `cursor-api`, or `http` when a receiver already exists |
+| Maximum dispatch attempts/cycle | `10`; use a smaller value such as `1` for the first real run |
+| Request timeout | `120` seconds |
+| Accepted models | empty, unless the organization needs an allowlist |
+| Prompt override | none initially |
+| Delivery | normal host branch/PR policy |
+| `<RONDO_REF>` | reviewed immutable commit SHA |
+
+For HTTP, also collect the HTTPS receiver URL and whether a shared secret is used. Only allow `http-allow-insecure: true` for an explicitly approved controlled environment; explain that traffic and prompt data are otherwise cleartext.
+
+## Phase 3 — Select bricks
+
+| # | Brick | File | Effect |
+|---|---|---|---|
+| 1 | Ticket directory | [`install/01-tickets-dir.md`](install/01-tickets-dir.md) | Creates the active queue and example format. |
+| 2 | Prompt | [`install/02-prompt.md`](install/02-prompt.md) | Uses the bundled prompt or adds a host override. |
+| 3 | Registry | [`install/03-state-store.md`](install/03-state-store.md) | Prepares the one-Issue branch registry. |
+| 4 | Scheduler | [`install/04-scheduler.md`](install/04-scheduler.md) | Adds the pinned GitHub workflow and runtime inputs. |
+| 5 | Agent backend | [`install/05-agent-runner.md`](install/05-agent-runner.md) | Configures Cursor or HTTP and tells the human which secret to set. |
+| 6 | Validation CI | [`install/06-validate-tickets.md`](install/06-validate-tickets.md) | Adds author-time ticket validation. |
+| 7 | Skills, optional | [`install/07-skills.md`](install/07-skills.md) | Installs standalone agent instructions. |
+| — | Uninstall | [`install/99-uninstall.md`](install/99-uninstall.md) | Stops or removes the reference profile. |
+
+Apply chosen bricks in numerical order. Bricks are designed to be repeatable when their preservation checks are followed; they are not permission to overwrite existing content.
+
+## Phase 4 — Verify locally
+
+Before committing or pushing:
+
+1. Review the complete diff and confirm only approved files changed.
+2. Confirm no secret value appears in the diff.
+3. Confirm workflow references use `<RONDO_REF>` or its chosen SHA, never `main` or an assumed tag.
+4. Confirm `base-branch`, `tickets-dir`, backend, capacity, timeout, and URL settings match the answers.
+5. Confirm the configured ticket path is intentional. An absent path is a valid empty queue, so deleting the final ticket must not break validation. A `.gitkeep` is optional for discoverability.
+6. From a reviewed Rondo checkout at the same ref, validate tickets:
+
+   ```bash
+   node action/src/cli/validate-tickets.mjs "<ticketsDir>"
+   ```
+
+7. If working in the Rondo source itself, run `cd action && npm test` on Node 24.
+
+Report any check that could not run. Do not translate “not run” into “passed”.
+
+## Phase 5 — Deliver through the host policy
+
+The workflow must exist on GitHub before remote smoke testing.
+
+- If the host requires review: create a branch, commit only approved files, push, open a PR, wait for review, and merge through the normal process.
+- If direct delivery is explicitly allowed: ask before committing or pushing, then push the reviewed change to the appropriate branch.
+- If another person owns delivery: leave the working tree ready and print the exact next commands without running them.
+
+Do not force-push, bypass checks, or write directly to a protected branch.
+
+## Phase 6 — Configure external state
+
+After repository changes are available on GitHub:
+
+1. Create or confirm the `rondo-registry` label if Brick 3 was selected.
+2. Have an authorized human install the Cursor GitHub App when using Cursor.
+3. Print the relevant command; the human enters the value:
+
+   ```bash
+   gh secret set CURSOR_API_KEY
+   # or
+   gh secret set RONDO_HTTP_SECRET
+   ```
+
+When configured, the shared secret HMAC-signs `<timestamp>.<exact-body>`. The receiver must validate `X-Rondo-Timestamp`, verify `X-Rondo-Signature: sha256=<hex>` with a timing-safe comparison, and enforce a replay window. HTTPS remains required.
+
+## Phase 7 — Remote smoke test
+
+Once the workflow is present on the default branch, run or ask the human to run:
+
+```bash
+gh workflow run rondo.yml -f dry_run=true
+gh run list --workflow=rondo.yml --limit 1
+```
+
+Inspect the selected run log. Dry-run discovers tickets, applies ordering and the capacity limit, and performs required VCS reads, but does not construct a dispatch adapter or require its backend secret.
+
+Expected summary:
+
+```text
+cycle done — dispatched 0, skipped <N>, failed 0
+```
+
+Then perform one controlled real run through Brick 4's manual capacity input:
+
+```bash
+gh workflow run rondo.yml -f dry_run=false -f max_dispatches=1
+```
+
+Watch provider usage, the registry Issue, and the resulting PR before raising the cap or enabling a frequent schedule.
+
+## Completion report
+
+Report:
+
+- installed bricks and files;
+- immutable Rondo ref;
+- backend, schedule, capacity, timeout, and base branch;
+- where data is sent;
+- local and remote checks with exact outcomes;
+- external steps still owned by the human;
+- rollback path from [`install/99-uninstall.md`](install/99-uninstall.md).
+
+Link to the upstream Rondo documentation at the chosen immutable ref, not to the host repository's README.

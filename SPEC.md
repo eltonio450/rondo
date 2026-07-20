@@ -1,203 +1,245 @@
-# Rondo Specification v0.3
+# Rondo Protocol Specification v0.4
 
-> Normative. Last updated: 2026-04-21.
+> Normative draft. Status: **Unreleased**.
 
-This document specifies the Rondo ticket format, lifecycle, and state storage. Any runner that implements this spec can be called "Rondo-conformant". The reference implementation lives in [`action/`](./action/).
+This document defines the portable Rondo protocol and the behavior of the reference runner in [`action/`](action/). Keywords **MUST**, **MUST NOT**, **SHOULD**, and **MAY** follow RFC 2119.
 
-Keywords **MUST**, **MUST NOT**, **SHOULD**, **MAY** follow [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
+Rondo distinguishes three kinds of requirement:
 
-## 1. Overview
+- **core protocol** — semantics a compatible implementation preserves;
+- **reference profile** — the GitHub Action, Issue registry, and shipped ports in this repository;
+- **agent contract** — behavior requested from a remote coding agent but not verified by the reference runner.
 
-A **ticket** is a Markdown file in the host repository. A **runner** scans the ticket directory on a schedule and dispatches an **agent** to make one reviewable Pull Request per eligible ticket per cycle. The only durable state the runner keeps outside the repo is a single **registry Issue** whose body holds a `slug → branchName` mapping — nothing more.
+## 1. Model and delivery guarantee
 
-The method is:
+A **ticket** is a Markdown file committed to a repository. A **cycle** scans ticket files on a base revision, derives eligibility, and dispatches a bounded set through an **agent adapter**. A **VCS port** supplies repository and change-request operations. A **registry** stores the last known branch for each live ticket when that branch cannot be derived reliably.
 
-1. Dev creates `<ticketsDir>/<slug>.md` on the default branch.
-2. Runner fires on schedule, reads every `.md` file, evaluates eligibility.
-3. For each eligible ticket, runner dispatches an agent and records the branch it ended up on in the registry Issue.
-4. Agent opens exactly one PR that modifies code **and** updates the ticket file.
-5. Reviewer merges; next cycle picks up where the ticket file says to.
+Rondo dispatch is **at least once**:
 
-## 2. Terms
+- the runner MUST NOT claim exactly-once execution;
+- if a dispatch has not produced a visible open change request before a later cycle, the ticket MAY be dispatched again;
+- the runner SHOULD attach a deterministic idempotency key to each dispatch;
+- an adapter or remote receiver SHOULD collapse repeated requests carrying the same key;
+- an idempotency key reduces duplicates but does not prove that one agent or one PR exists.
 
-| Term | Definition |
-|---|---|
-| **Ticket file** | A `.md` file in `<ticketsDir>` whose frontmatter conforms to §3.2. |
-| **Slug** | The filename without `.md`, lowercase, kebab-case, stable across a ticket's lifetime. |
-| **Registry Issue** | The single GitHub Issue in the host repo whose body carries the `slug → branchName` mapping for every ticket currently on the queue (§6). |
-| **Dispatch** | One launch of an agent against a ticket. Zero or more per ticket's lifetime. |
-| **Runner** | The scheduled process that scans files, evaluates eligibility, and launches dispatches. |
-| **Agent** | The external background coding agent (Cursor API, Claude Code, Codex, custom HTTP endpoint). |
-| **Host repo** | The repository in which Rondo is installed. |
+The reference runner requests the agent behavior in §7. It does not poll the remote agent and does not verify PR count, branch, base, or diff after dispatch.
 
-## 3. Ticket file format
+## 2. Portable architecture
 
-### 3.1 Location and naming
+The following semantics are core:
 
-- Ticket files **MUST** live in `<ticketsDir>`, a directory relative to the repo root, defaulting to `tickets/`.
-- Filenames **MUST** match `^[a-z0-9][a-z0-9-]{0,62}\.md$`. The part before `.md` is the **slug**.
-- The slug **MUST** be unique within the repo.
+1. Tickets and their durable work history live in version control.
+2. Eligibility is derived each cycle rather than transitioned through a persisted status machine.
+3. Dependencies resolve when the corresponding ticket file is absent.
+4. Open change requests are matched by head branch.
+5. Dispatch order is deterministic and dispatch attempts are bounded when a capacity is configured.
+6. A successful dispatch returns the real branch used by the backend and that mapping is persisted.
 
-### 3.2 Frontmatter
+The following mechanisms are ports and MAY be replaced:
 
-Ticket files **MUST** begin with a **key:value** frontmatter block in the first lines of the file (no YAML fences, no `---` delimiter — keys are parsed line by line until the first blank line or the first line that does not match `^[a-z_]+:\s*.+$`).
+- scheduler and execution environment;
+- VCS provider and change-request API;
+- registry transport;
+- remote-agent provider;
+- prompt additions;
+- authoring and validation UX.
 
-| Key | Required? | Type | Semantics |
+A port MUST document deviations from the core semantics. [ADAPT.md](ADAPT.md) describes the boundaries.
+
+## 3. Ticket file
+
+### 3.1 Location and name
+
+- Ticket files MUST be direct `.md` children of `<ticketsDir>` unless a port explicitly declares recursive discovery.
+- The reference default is `tickets/`.
+- A filename MUST match `^[a-z0-9][a-z0-9-]{0,62}\.md$`.
+- The filename without `.md` is the stable, repository-unique **slug**.
+
+### 3.2 Frontmatter grammar
+
+A ticket MUST start with line-based frontmatter. There are no YAML fences.
+
+- Each line matches `^[a-z_]+:\s*.+$`.
+- The first blank or non-matching line ends the block.
+- Unknown matching keys are preserved for forward compatibility.
+
+| Key | Requirement | Parsed type | Meaning |
 |---|---|---|---|
-| `owner` | **MUST** | string | GitHub username of the human reviewer. |
-| `priority` | **MUST** | integer 0–99 | Lower number dispatches first. Tie-break by filename lexical order. |
-| `model` | **MUST** | string | Agent model identifier. Runners **MUST** accept `default` and **MAY** accept backend-specific aliases. Unknown values skip the ticket and log a warning. |
-| `depends` | MAY | comma-separated list of slugs or filenames | The ticket is ineligible while any listed dependency still exists as a file in `<ticketsDir>`. |
-| `paused` | MAY | `true` \| ISO date (`YYYY-MM-DD`) | If `true`, ticket is never eligible. If a date in the future, ineligible until that date (inclusive-start). If a date today or past, treated as absent. |
+| `owner` | MUST | string matching `^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$` | Human reviewer context. The reference runner does not assign or notify this user. |
+| `priority` | MUST | integer 0–99 | Lower values are considered first; slug is the lexical tie-break. |
+| `model` | MUST | non-empty, non-whitespace string | `default` or a backend-specific identifier. |
+| `depends` | MAY | comma-separated slugs or filenames | Ineligible while any named ticket file exists. |
+| `paused` | MAY | `true`, `false`, or a real `YYYY-MM-DD` calendar date | `true` pauses indefinitely; `false` is equivalent to absence; a future date pauses until that date. |
+| `spec` | MAY | version string | Informational protocol pin; the reference runner validates its shape but does not negotiate older behavior. |
 
-Any other `key: value` line in the frontmatter is **reserved for future use** and **MUST** be preserved by agents when rewriting the file.
+Unknown keys MUST NOT be interpreted as capabilities unless the active runner or adapter documents them.
 
 ### 3.3 Body
 
-After frontmatter, the body is free-form Markdown. Agents **SHOULD** maintain the following sections (idiomatic, not required by the spec):
+The body is free-form Markdown. For interoperability, agents SHOULD maintain:
 
-- `## Mission` — scope and constraints
-- `## Steps` — one H3 per step; one PR per step
-- `## Decisions (newest first)` — newest-first dated log
-- `## Progress history (newest first)` — newest-first dated log, one line per merged PR
+- `## Mission`;
+- `## Steps (1 PR each)`;
+- `## Decisions (newest first)`;
+- `## Progress history (newest first)`.
 
-The body **MAY** include `[resume: YYYY-MM-DD]` as a suffix in the first H1 title when an agent has paused the ticket with a future date (§5.2). Agents **MUST** strip this suffix when the ticket resumes.
+Newest-first means new entries are inserted at the top of the relevant section.
 
-## 4. Eligibility
+## 4. Discovery and validation
 
-A ticket file **IS eligible** for dispatch in cycle *c* if **all** of the following hold:
+The runtime scanner MUST tolerate individual malformed tickets: it skips them with `invalid_frontmatter` and continues the cycle.
 
-1. Its frontmatter has the three required keys `owner`, `priority`, `model` with the primitive types declared in §3.2 (string / integer / string). **Full** schema validation (owner pattern, priority range 0–99, `depends`/`paused`/`spec` formats) is enforced at author/CI time by the validator shipped in [`action/src/cli/validate-tickets.mjs`](./action/src/cli/validate-tickets.mjs) against [`schemas/ticket.schema.json`](./schemas/ticket.schema.json). At runtime the runner is deliberately lenient: malformed tickets are skipped with reason `invalid_frontmatter`, logged, and **MUST NOT** crash the cycle.
-2. Its `model` is `default` or in the runner's accepted-models allowlist (empty allowlist = accept any).
-3. Its `paused` value is absent, `false`, or a date ≤ today.
-4. Every slug in `depends` does **not** correspond to an existing file in `<ticketsDir>`. (Missing files are treated as "dependency completed".)
-5. No open PR in the host repo has a head branch equal to this ticket's branch — read from the registry if known, otherwise the default `<branchPrefix><slug>`.
+The reference CI validator performs stricter author-time checks against [`schemas/ticket.schema.json`](schemas/ticket.schema.json). Its CLI contract is:
 
-Ineligible tickets **MUST** be skipped without side effects, with a single log line explaining why.
+- exit `0`: all discovered tickets are valid; an empty or absent ticket directory is an empty queue;
+- exit `1`: one or more ticket files are invalid;
+- exit `2`: another setup/I/O error occurs, such as an unreadable existing directory or ticket.
 
-Runners rely on their cron cadence (hourly by default) to avoid dispatching the same ticket twice while a previous dispatch is still in flight. A ticket that was dispatched in cycle *c* but has not opened a PR by cycle *c+1* will be re-dispatched — this is considered acceptable: at most one PR will survive, and the duplicate agent run is a rare corner case, not a correctness issue.
+Treating an absent directory as empty preserves the terminal lifecycle: deleting the final ticket MUST NOT make validation fail merely because Git no longer materializes the directory. A tracked `.gitkeep` MAY be used for discoverability but is not required by the protocol or validator.
 
-## 5. Lifecycle
+Validators SHOULD detect dependency cycles among files present in the validated directory. A reference to an absent dependency cannot reliably be called a typo because absence means completion under §5.
 
-A ticket's state is **derived from reality**, not tracked in a state machine. At any moment, a ticket is in exactly one of:
+## 5. Eligibility
 
-- **Eligible** — file exists, not paused, no open PR on its branch, dependencies resolved.
-- **In flight** — a PR is open on the ticket's branch.
-- **Paused** — the frontmatter carries `paused: true` or `paused: <future-date>`.
-- **Blocked** — the frontmatter's `depends` key lists at least one slug whose file still exists.
-- **Gone** — the `.md` file no longer exists (the last cycle's agent chose output **(c) Done**). The registry drops the entry on the next cycle.
+A parsed ticket is eligible at the beginning of a cycle when all conditions hold:
 
-There is no persistent status to transition between. Every cycle, the runner recomputes the state of every ticket from the filesystem + the list of open PRs.
+1. `owner`, `priority`, and `model` conform to the constraints in §3.2.
+2. `model` is `default`, is in the configured allowlist, or no allowlist is configured.
+3. `paused` is absent, `false`, or a date less than or equal to the cycle's `today` value.
+4. No normalized slug in `depends` exists among the current ticket files.
+5. No open change request has a head branch equal to the registry branch for the ticket, or to `<branchPrefix><slug>` when no mapping exists.
 
-### 5.1 Agent outputs per cycle
+An ineligible ticket MUST be skipped without dispatch and SHOULD emit one stable reason.
 
-A dispatched agent **MUST** produce exactly one of four outputs in a single PR. The PR **MUST** always include a diff touching the ticket `.md` file — even when there is no code change.
+Eligibility is not a reservation. A ticket can be eligible again if the remote dispatch remains invisible to the VCS at the next cycle.
 
-| Output | Ticket file change | Code change |
+## 6. Ordering and capacity
+
+Eligible tickets are considered by ascending `priority`, then lexical slug.
+
+A runner MAY configure a maximum number of dispatch **attempts** per cycle. The reference input is `max-dispatches-per-cycle`:
+
+- default in the shipped Action: `10`;
+- integer in `1..1000`;
+- absent configuration uses the safe reference default `10`; there is no unlimited mode;
+- a failed adapter call consumes one slot;
+- eligible tickets beyond the limit are skipped with `max_dispatches_per_cycle_reached`;
+- dry-run MUST simulate the same ordering and limit without creating remote state.
+
+Capacity is a safety bound, not a monetary budget. Operators MUST account for provider pricing separately.
+
+## 7. Agent contract
+
+For each dispatch, the runner supplies:
+
+- repository identity;
+- ticket path relative to the repository root;
+- suggested head branch;
+- base branch;
+- requested model;
+- prompt;
+- deterministic idempotency key.
+
+The prompt MUST request that the agent read the ticket and choose exactly one outcome:
+
+| Outcome | Requested ticket change | Requested code change |
 |---|---|---|
-| **(a) Progress** — ship the next step | Append to `Progress history` and (as needed) `Decisions`; may re-scope `Steps`. | Yes. |
-| **(b) Pause** — defer this ticket | Set frontmatter `paused: YYYY-MM-DD` (future) or `paused: true` (indefinite). Log the reason in `Decisions`. | No. |
-| **(c) Done** — retire the ticket | Delete the `.md` file. Durable knowledge **MUST** be promoted into canonical docs in the same PR. | Doc changes only; no functional code. |
-| **(d) No-op** — document a blocker | Append to `Decisions` explaining why no progress was made and what is needed. | No. |
+| Progress | Record progress and relevant decisions | One reviewable step |
+| Pause | Set `paused:` and record why | None |
+| Done | Promote durable knowledge, then remove or archive the ticket | Documentation or cleanup as needed |
+| No-op | Record blocker, need, and owner | None |
 
-Agents **MUST NOT** produce a PR with zero file changes. Agents **MUST NOT** produce more than one PR per dispatch.
+The prompt MUST request that exactly one relevant change request exist for the dispatch: create it when absent, but reuse/update a matching open change request on retry and never open a second one. It must touch or remove the ticket, use the requested/suggested head branch when the backend can honor it, and target the requested base branch. The registry checkpoints the actual branch returned by the adapter after launch. These are **agent conformance requirements**; the reference runner does not attest that they happened.
 
-### 5.2 Resume from pause
+An agent SHOULD remove an expired `paused:` key and any matching `[resume: DATE]` title suffix before progressing.
 
-When an agent pauses a ticket (output **(b)**) with a future date:
-1. It **MUST** add `paused: YYYY-MM-DD` to the frontmatter.
-2. It **SHOULD** add `[resume: YYYY-MM-DD]` as a suffix to the first H1 title for visibility.
-3. On the first eligible cycle after the resume date (§4), the next agent **MUST** strip the title suffix and remove the `paused:` key before starting work.
+## 8. Adapter contract
 
-### 5.3 Completion
+An adapter dispatches one remote agent and returns non-empty `{ agentId, branchName }`. It MUST:
 
-When choosing output **(c) Done**, the active agent **MUST**:
-1. Delete the ticket file in the same PR as the final code/doc changes.
-2. Before deletion, promote any durable knowledge out of the ticket into canonical long-lived docs. The runner's prompt **SHOULD** remind the agent of this.
+- accept all fields from §7;
+- apply the configured request timeout;
+- throw on invalid responses or unrecoverable failures;
+- avoid blind retries of non-idempotent POSTs unless the backend documents idempotency;
+- return the actual backend branch, not merely the suggestion, when known.
 
-On the first cycle after such a PR merges, the runner **MUST** drop the ticket's entry from the registry (§6) — the `.md` no longer exists, so the entry is stale.
+The reference Action ships only `cursor-api` and `http`. Full details are normative in [action/src/adapters/CONTRACT.md](action/src/adapters/CONTRACT.md).
 
-## 6. State storage — the registry Issue
+## 9. VCS and registry contract
 
-### 6.1 One Issue total
+A VCS port provides the operations required to:
 
-The runner **MUST** maintain a single long-lived GitHub Issue per host repo, identified by the label `rondo-registry`. If no such Issue exists at the start of a cycle, the runner **MUST** create one.
+1. list open change requests with head branch and identifier;
+2. find registry records by stable marker;
+3. create a registry record;
+4. replace its body.
 
-There **MUST NOT** be a separate Issue per ticket. The registry is the only durable piece of state Rondo persists outside the repo.
+The reference GitHub port uses one open Issue labelled `rondo-registry`. Its body contains:
 
-### 6.2 Registry Issue body
-
-The Issue body carries a single machine-readable block and a human-readable table. The runner **MUST** overwrite the body at the end of every cycle — the body is always a snapshot of current reality.
-
-```
+```text
 <!-- rondo-registry
 {
-  "<slug>": "<branchName>",
-  ...
+  "<slug>": "<branchName>"
 }
 -->
-
-# Rondo — ticket registry
-
-Updated <ISO-8601 timestamp>. ...
-
-| Ticket | Branch | State |
-|---|---|---|
-| `<slug>` | `<branchName>` | <state> |
 ```
 
-The machine-readable block is delimited by:
+The remaining body is a human-readable snapshot. The machine block is authoritative for branch mapping; status text is informational.
 
-- Opening marker: `<!-- rondo-registry` at the start of a line.
-- Closing marker: the first `-->` after the opening marker.
+Rules:
 
-The payload between the markers is a JSON object where keys are ticket slugs and values are the branch names the runner last knew each ticket to be using. Runners **MUST** treat a missing marker, an empty payload, or malformed JSON as `{}` — the next cycle will re-populate it.
+- tolerant parsing tools MAY map absent/malformed data to an empty null-prototype mapping;
+- the reference runner MUST fail closed when an existing registry is malformed, because falling back to a conventional branch can duplicate work on a provider-generated branch;
+- a successful dispatch updates `slug → actual branch`;
+- entries whose ticket file is absent are removed;
+- the human snapshot SHOULD show `dispatched (awaiting PR)` after a successful checkpoint until an open PR is visible;
+- a registry write failure MUST be observable and MUST NOT be reported as a fully successful cycle;
+- a port SHOULD persist successful mappings before they can be lost to a later timeout;
+- multiple matching registries SHOULD produce a warning and deterministic selection.
 
-### 6.3 Mapping semantics
+The portable VCS interface is defined in [action/src/vcs/CONTRACT.md](action/src/vcs/CONTRACT.md).
 
-Entries in the mapping reflect the **last branch a dispatched agent was launched on** for each ticket. Specifically:
+## 10. Reference Action inputs
 
-- When a cycle dispatches an agent for a ticket, the adapter returns the real branch name (which may differ from the suggested `<branchPrefix><slug>`, e.g. Cursor auto-generates branches). The runner records that branch in the mapping.
-- When a cycle observes that a ticket's `.md` file no longer exists, the runner **MUST** drop that slug from the mapping.
-- Tickets that have never been dispatched have no entry. The runner uses `<branchPrefix><slug>` as the default branch for those.
+| Input | Default | Semantics |
+|---|---|---|
+| `dry-run` | `false` | Discover, order, and simulate capacity without constructing a dispatch adapter or requiring its secret. |
+| `tickets-dir` | `tickets` | Non-escaping directory relative to repository root; direct ticket children only. |
+| `branch-prefix` | `rondo/` | Valid suggested branch prefix ending in `/`. |
+| `base-branch` | `main` | Valid change-request base branch. Installers SHOULD set the detected default branch. |
+| `agent-backend` | `cursor-api` | Shipped: `cursor-api`, `http`. |
+| `accepted-models` | empty | Comma-separated allowlist; empty accepts any, and `default` is always accepted. |
+| `max-dispatches-per-cycle` | `10` | Dispatch-attempt cap defined in §6. |
+| `request-timeout-seconds` | `120` | Integer `1..3600`; timeout for each provider/VCS network request. |
+| `http-url` | empty | Required for `http`; absolute URL without embedded credentials. HTTPS required by default. |
+| `http-allow-insecure` | `false` | Explicit opt-in to cleartext HTTP for controlled local/private environments. |
 
-### 6.4 No labels, no per-ticket Issues
+The reference Action targets Node 24.
 
-Rondo v0.3 does **not** maintain any `rondo:status:*`, `rondo:paused`, or `rondo` labels on per-ticket Issues. The only label involved is `rondo-registry` on the single registry Issue. Ticket state is derived every cycle from the filesystem and the repo's open PRs.
+## 11. Security and transport
 
-## 7. PR conventions
+- Secrets MUST be supplied through the execution environment, never ticket frontmatter or prompts.
+- The generic HTTP adapter MUST reject non-HTTPS URLs unless `http-allow-insecure` is true.
+- When a shared secret is configured, the HTTP adapter MUST send `X-Rondo-Timestamp` and `X-Rondo-Signature: sha256=<hex>`, where the signature is HMAC-SHA256 over `<timestamp>.<exact-body>`.
+- Receivers MUST verify the HMAC with a timing-safe comparison and reject timestamps outside their configured replay window.
+- The reference HTTP adapter MUST send the dispatch idempotency key in both `Idempotency-Key` and the JSON `idempotency_key` field.
+- Operators MUST review what prompt and repository metadata leave their environment.
+- Workflow dependencies and Rondo itself SHOULD be pinned to reviewed immutable commit SHAs.
 
-- A dispatched agent **MUST** open exactly one PR per dispatch.
-- The PR **MUST** include a diff to the ticket `.md` file or its deletion — even on output **(d) No-op** (§5.1).
-- The PR head branch **MUST** match the branch the adapter returned to the runner (and which the runner wrote to the registry). The runner suggests `<branchPrefix><slug>` where `<branchPrefix>` defaults to `rondo/`; adapters that can honor the suggestion **SHOULD** do so.
-- The PR base branch **MUST** equal `<baseBranch>` as declared by the runner.
+See [SECURITY.md](SECURITY.md).
 
-## 8. Dispatch contract
+## 12. Conformance
 
-A runner dispatches an agent by passing it:
+A **core-compatible runner** implements §§3–7 and declares its delivery semantics and capacity behavior.
 
-1. The path of the ticket file, relative to the host repo root
-2. The target branch name (the "suggested branch")
-3. The base branch name
-4. The prompt text (see [PROMPT.md](./PROMPT.md); a host repo **MAY** override it by convention by placing `rondo.prompt.md` at its root — if present, the runner uses it instead of or on top of the bundled prompt, no config key needed)
+A **reference-profile-compatible runner** additionally implements §§8–10 or behaviorally equivalent ports.
 
-The adapter returns `{ agentId, branchName }`. The runner persists `branchName` in the registry so that subsequent cycles can match the ticket to any open PR on that branch.
+An **agent-conformant dispatch** satisfies the requested PR behavior in §7. Runner conformance alone does not prove agent conformance.
 
-How the agent authenticates, creates a worktree, or opens the PR is out of scope for this spec. Runner-level settings (tickets directory, branch prefix, base branch, agent backend) are configured by the installer — in the reference implementation via `with:` inputs in the host's workflow file, but any runner-level mechanism is conformant. Agent adapters are also a runner-level concern.
+Extensions MUST preserve unknown frontmatter keys and MUST document new keys, state, or side effects. Implementations SHOULD expose their supported protocol version.
 
-## 9. Conformance
+## 13. Versioning
 
-A runner is **Rondo-conformant** if it:
+Breaking protocol changes increment the major version. Additive, backward-compatible protocol changes increment the minor version. Implementation-only fixes increment the implementation release without changing the protocol version.
 
-- Accepts ticket files per §3 and rejects malformed ones with a warning (not a crash)
-- Evaluates eligibility per §4
-- Persists the registry per §6
-- Enforces PR conventions per §7
-
-Runners **MAY** add features (priorities beyond 0–99, additional frontmatter keys under a `x-` prefix, custom agent backends) as long as they do not break the above.
-
-## 10. Versioning
-
-This document is versioned as `SPEC.md v<major>.<minor>`. Breaking changes bump the major. Additive changes bump the minor. The current reference implementation **MUST** declare which spec version it targets.
-
-Ticket files **MAY** include an optional `spec: 0.2` frontmatter key to pin to a specific spec version. If absent, the latest version the runner implements is assumed.
+Version `0.4` is unreleased until a reviewed immutable commit and release notes are published. Installation docs use `<RONDO_REF>` rather than assuming a tag exists.

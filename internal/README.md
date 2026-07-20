@@ -1,50 +1,50 @@
-# `internal/` — tests and development notes
+# `internal/` — maintainer tests and fixtures
 
-Anything the Rondo maintainers need that isn't shipped to end users goes here. Host repos never `checkout` this directory; it lives in the Rondo repo only.
+This directory contains development-only tests for the reference implementation. It is not a host-repository configuration surface.
 
-## Structure
+## Test areas
 
-```
-internal/
-  README.md                     (this file)
-  tests/
-    frontmatter.test.mjs        Ticket frontmatter parser/serializer.
-    eligibility.test.mjs        Pure eligibility predicate per SPEC §4.
-    registry.test.mjs           Registry Issue body parser/renderer per SPEC §6.
-```
+Tests should cover:
 
-## Running the tests
+- frontmatter parse/serialize and v0.4 values such as `paused: false`;
+- eligibility and dependency semantics;
+- registry parse/render, strict corruption handling, and derived display state;
+- runner ordering, capacity, dry-run, idempotency keys, and registry checkpoint failures;
+- validator syntax, cycles, and missing-directory exit behavior;
+- Action input normalization and bounds;
+- Cursor/HTTP/VCS request shape, timeout, authentication, pagination, retries, and response validation;
+- prompt loading and host override modes.
 
-From the repo root:
+Some areas may still be missing coverage. This list is the target, not a claim that every bullet is complete; inspect the actual test files and coverage before relying on it.
+
+## Run
+
+Use Node 24 from the repository root:
 
 ```bash
 node --test 'internal/tests/*.test.mjs'
 ```
 
-Or, from `action/`:
+Or:
 
 ```bash
+cd action
 npm test
+npm run test:coverage
 ```
 
-Requires **Node 20+**. Zero dependencies — the tests use `node:test` and `node:assert`, both built-in.
+The coverage command applies the same minimums as CI: 90% lines, 80% branches, and 90% functions.
 
-## What is tested vs. what is not
+No live Cursor or GitHub credentials belong in the unit suite. Inject `fetchImpl`, use deterministic clocks, and assert both requests and failure behavior.
 
-**Tested (pure logic):**
-- `action/src/lib/frontmatter.mjs` — parse/serialize, roundtrip, CRLF, unknown keys.
-- `action/src/core/eligibility.mjs` — every branch of SPEC §4 (invalid frontmatter, paused, depends, open PR, model allowlist).
-- `action/src/core/registry.mjs` — parse/render the `<!-- rondo-registry -->` block, malformed-body tolerance, roundtrip.
+## Test principles
 
-**Not tested (skeletal I/O that the installing agent wires):**
-- `action/src/vcs/gh-client.mjs` — thin wrapper over `fetch` against GitHub's REST API.
-- `action/src/adapters/cursor-api.mjs` — depends on Cursor's current API surface.
-- `action/src/core/runner.mjs` — the orchestrator; stable parts are covered by the pure unit tests above.
+- Protocol rules in `SPEC.md` need a focused regression test.
+- Every network port needs timeout and malformed-response tests.
+- Non-idempotent dispatch POSTs must not gain blind retries.
+- A registry persistence failure after dispatch is a critical test case.
+- Dry-run must remain side-effect free and provider-secret free.
+- Missing and empty ticket directories must both remain valid empty queues; unrelated I/O failures must remain distinguishable.
+- Tests must not mutate real GitHub, provider, or user state.
 
-If you implement a new adapter (`adapters/claude-code.mjs`), please add tests here with mocked HTTP (inject a `fetchImpl` into the factory — the existing skeletal code already accepts one).
-
-## When to add a test
-
-- Any change to `core/eligibility.mjs` — SPEC §4 must stay covered.
-- Any change to the registry Issue body format — update `registry.test.mjs` so SPEC §6 stays enforced.
-- Any change to the frontmatter parsing rules — update `frontmatter.test.mjs` so SPEC §3.2 stays enforced.
+When adding a fixture, keep ticket content synthetic and free of credentials or real customer data.

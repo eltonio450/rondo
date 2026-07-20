@@ -1,6 +1,12 @@
 // Ticket eligibility per SPEC.md §4.
 // Pure function; no I/O. The caller gathers inputs and interprets the result.
 
+import { isIsoCalendarDate } from "../lib/frontmatter.mjs";
+
+const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const DEPENDS_RE =
+  /^[a-z0-9][a-z0-9-]{0,62}(?:\.md)?(?:\s*,\s*[a-z0-9][a-z0-9-]{0,62}(?:\.md)?)*$/;
+
 /**
  * @param {object} params
  * @param {object} params.ticket               Parsed ticket with { slug, frontmatter }.
@@ -23,7 +29,17 @@ export function isEligible({
 }) {
   const fm = ticket.frontmatter || {};
 
-  if (!fm.owner || typeof fm.priority !== "number" || !fm.model) {
+  if (
+    typeof fm.owner !== "string" ||
+    !OWNER_RE.test(fm.owner) ||
+    !Number.isInteger(fm.priority) ||
+    fm.priority < 0 ||
+    fm.priority > 99 ||
+    typeof fm.model !== "string" ||
+    fm.model.trim().length === 0 ||
+    (fm.depends !== undefined &&
+      (typeof fm.depends !== "string" || !DEPENDS_RE.test(fm.depends)))
+  ) {
     return { eligible: false, reason: "invalid_frontmatter" };
   }
 
@@ -33,16 +49,17 @@ export function isEligible({
 
   if (fm.paused !== undefined) {
     const paused = fm.paused;
-    if (paused === true) {
+    if (paused === false) {
+      // Explicit false is equivalent to an absent pause directive.
+    } else if (paused === true) {
       return { eligible: false, reason: "paused_indefinitely" };
-    }
-    if (typeof paused === "string" && /^\d{4}-\d{2}-\d{2}$/.test(paused)) {
+    } else if (isIsoCalendarDate(paused)) {
       if (paused > today) {
         return { eligible: false, reason: `paused_until:${paused}` };
       }
       // paused <= today → treat as absent, fall through.
     } else {
-      // Any other paused value (false, non-date string, number) is malformed
+      // Any other paused value (non-date string, number, etc.) is malformed
       // per SPEC §3.2 — the CI validator rejects it; stay aligned at runtime.
       return { eligible: false, reason: "invalid_frontmatter" };
     }

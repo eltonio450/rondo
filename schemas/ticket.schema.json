@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/eltonio450/rondo/main/schemas/ticket.schema.json",
+  "$id": "urn:rondo:schema:ticket:0.4",
   "title": "Rondo ticket frontmatter",
   "description": "Schema for the frontmatter block at the top of a Rondo ticket .md file. Applies to the parsed key:value pairs before the first blank line of the file. Body content is not validated by this schema.",
   "type": "object",
@@ -21,7 +21,8 @@
     "model": {
       "type": "string",
       "description": "Agent model identifier. 'default' is always accepted. Backend-specific aliases depend on the runner.",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": ".*\\S.*"
     },
     "depends": {
       "type": "string",
@@ -29,15 +30,15 @@
       "pattern": "^[a-z0-9][a-z0-9-]{0,62}(?:\\.md)?(?:\\s*,\\s*[a-z0-9][a-z0-9-]{0,62}(?:\\.md)?)*$"
     },
     "paused": {
-      "description": "Pause directive. `true` pauses indefinitely. An ISO date (YYYY-MM-DD) pauses until that date.",
+      "description": "Pause directive. `true` pauses indefinitely, `false` is equivalent to absence, and an ISO date (YYYY-MM-DD) pauses until that date.",
       "oneOf": [
-        { "type": "boolean", "const": true },
-        { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+        { "type": "boolean" },
+        { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "format": "date" }
       ]
     },
     "spec": {
       "type": "string",
-      "description": "Optional spec version pin (e.g. '0.1'). If absent, the latest spec version the runner implements is assumed.",
+      "description": "Optional spec version pin (e.g. '0.4'). If absent, the latest spec version the runner implements is assumed.",
       "pattern": "^[0-9]+\\.[0-9]+$"
     }
   }

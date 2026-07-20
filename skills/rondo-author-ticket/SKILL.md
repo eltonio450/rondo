@@ -1,67 +1,71 @@
 ---
 name: rondo-author-ticket
-description: Turn an informal ask into a well-formed Rondo ticket (.md file with frontmatter, Mission, Steps). Invoke when the user says "write a ticket", "draft a rondo ticket", or describes work they want an agent to pick up.
+description: Turn an informal request into a valid, reviewable Rondo ticket while preserving queue safety and dependency semantics.
 ---
 
-# rondo-author-ticket
+# Author a Rondo ticket
 
-You are going to help the user draft a new ticket for Rondo. A ticket is a Markdown file in `<ticketsDir>/` (usually `tickets/`). The runner scans it every cycle and dispatches an agent.
+Use this skill to create a ticket file for a Rondo v0.4-compatible runner. This skill is standalone; do not assume the Rondo source tree or schema is present.
 
-## Before you write anything
+## Discover first
 
-Ask the user (in one message, not one-by-one):
+1. Read repository guidance and inspect the current working tree.
+2. Find `tickets-dir` in `.github/workflows/rondo.yml`; default to `tickets` only when no configured path exists.
+3. List current ticket filenames and read any ticket named as a dependency.
+4. Note whether the team uses optional `.gitkeep`; do not make it a validation requirement.
+5. Do not overwrite an existing slug.
 
-1. **Mission** — what's the full scope in 2–4 sentences? If the user waves vaguely, push back: agents work better with a crisp mission.
-2. **Owner** — which GitHub handle should be the human reviewer? Default: the user themselves.
-3. **Priority** — 0 (fire), 2 (normal), 9 (nice-to-have). Default: 2.
-4. **Model** — leave as `default` unless the user has a reason.
-5. **Dependencies** — are there other tickets currently on the queue this one must wait for?
-6. **Pause** — should this ticket wait until a future date?
-7. **Rough steps** — what's the first step? What comes after? Three concrete steps are better than ten vague ones.
+## Clarify
 
-## The file to write
+Ask in one concise message only for facts not already supplied:
 
-File path: `<ticketsDir>/<slug>.md` where `<slug>` matches `^[a-z0-9][a-z0-9-]{0,62}$` — kebab-case, short, stable. Propose a slug to the user and confirm before writing.
+- mission and measurable end state;
+- GitHub reviewer handle (`owner`);
+- priority `0..99` (default `2`);
+- model (default `default`);
+- dependencies on currently live ticket slugs;
+- pause date/indefinite pause, if any;
+- the first concrete reviewable step and likely following steps.
 
-Template:
+Propose a short stable slug matching `^[a-z0-9][a-z0-9-]{0,62}$`. Confirm before writing when a materially different slug would affect dependencies or naming conventions.
+
+## Ticket format
+
+Ticket frontmatter is line-based, not YAML. It starts on line 1, has no `---` fences, and ends at the first blank line.
 
 ```markdown
-owner: <handle>
-priority: <N>
+owner: <github-handle>
+priority: 2
 model: default
+depends: ticket-a, ticket-b
+paused: 2026-08-15
 
-# EPIC: <Title — short and descriptive; shown in the registry Issue's table>
+# <Short descriptive title>
 
 ## Mission
-<2–4 sentences. What are we doing, why, and what's the end state?>
+<What, why, constraints, and observable end state in 2–4 sentences.>
 
 ## Steps (1 PR each)
 
-### Step 1 — <concrete, ships-in-one-PR>
-<What the agent should do on the first cycle. Be specific. Reference files if you can.>
+### Step 1 — <Concrete change that fits one reviewable PR>
+<Relevant files, behavior, tests, and non-goals.>
 
-### Step 2 — <next>
-
-### Step 3 — <after that>
+### Step 2 — <Next independently reviewable change>
 
 ## Decisions (newest first)
-- <YYYY-MM-DD> — *(agent fills this in as it makes calls)*
 
 ## Progress history (newest first)
-- <YYYY-MM-DD> — *(agent appends one line per merged PR)*
 ```
 
-## Frontmatter rules (non-negotiable per SPEC §3.2)
+Include `depends` and `paused` only when needed. Valid pause values are `true`, `false`, or `YYYY-MM-DD`; omission is clearer than `false`. Missing dependency files mean completed under the protocol, so warn when a named dependency is not present. Reject a dependency cycle among live tickets.
 
-- **No YAML `---` fences.** Key: value per line at the very top of the file.
-- Blank line ends the frontmatter.
-- Required: `owner`, `priority`, `model`.
-- Optional: `depends: ticket-a, ticket-b`, `paused: 2026-05-01` or `paused: true`, `spec: 0.2`.
+## Quality bar
 
-## Self-check before handing over
+- Mission explains what/why/end state, not implementation trivia alone.
+- Each step is independently reviewable and names validation expectations.
+- Non-goals and risky migrations are explicit.
+- No secret, credential, customer data, or private incident detail is embedded.
+- Newest-first sections start empty; agents insert new entries at the top.
+- Owner/model/priority and filename obey the rules above.
 
-- [ ] Frontmatter validates against [`schemas/ticket.schema.json`](../../schemas/ticket.schema.json).
-- [ ] The slug is kebab-case, unique in `<ticketsDir>/`, and short enough to read.
-- [ ] Mission answers *what* and *why* in 2–4 sentences.
-- [ ] Steps are concrete enough that a background agent knows what to code on the first cycle.
-- [ ] Decisions and Progress sections are present but empty (newest-first convention).
+If the repository contains the validator, run it for the configured directory. Otherwise report that schema validation was not run and hand over the file for the host CI check. Do not commit or push unless explicitly requested.

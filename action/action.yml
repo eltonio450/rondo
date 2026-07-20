@@ -34,7 +34,19 @@ inputs:
     description: "Required when agent-backend = http. URL the runner POSTs dispatch payloads to."
     required: false
     default: ""
+  http-allow-insecure:
+    description: "Allow an http:// dispatch URL. Unsafe outside a controlled network; HTTPS is required by default."
+    required: false
+    default: "false"
+  max-dispatches-per-cycle:
+    description: "Maximum eligible tickets attempted in one cycle (1-1000). Failed attempts consume capacity."
+    required: false
+    default: "10"
+  request-timeout-seconds:
+    description: "Timeout for each GitHub or backend HTTP request, in seconds (1-3600)."
+    required: false
+    default: "120"
 
 runs:
-  using: "node20"
+  using: "node24"
   main: "src/index.mjs"

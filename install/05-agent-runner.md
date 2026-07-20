@@ -1,90 +1,75 @@
-# Brick 5 — Agent runner
+# Brick 5 — Agent dispatch port
 
-## What it does
+## Purpose
 
-When the scheduler finds an eligible ticket, this brick is what actually **launches a background AI agent** against that ticket — handing it the `.md` file path, the branch name, and the base branch, and waking it up to do the work described in [`PROMPT.md`](../PROMPT.md).
+Configure the remote service that receives one bounded, timed dispatch request for each selected ticket.
 
-## Default we ship
+Only `cursor-api` and `http` are shipped. Claude Code, Codex Cloud, and other providers require an HTTP receiver or a new adapter implementing the contract.
 
-**Cursor Background Agents API**, one shared `CURSOR_API_KEY` secret stored at the repo (or org) level in GitHub Actions secrets.
+## Cursor reference adapter
 
-Why this default:
-- Cursor's Background Agents API is the most mature of the background-agent APIs at time of writing: reliable, fast, good defaults on model selection, clean dispatch with no extra infra to host.
-- One shared key ≈ one shared seat used by the runner itself, which is billed and tracked at the org level. Simple.
-- The runner calls Cursor → Cursor clones, edits, opens the PR → runner records the branch name in the registry Issue. No custom receiver to host.
+Prerequisites owned by an authorized human:
 
-## Questions to ask the human
+- install the Cursor GitHub App on the host repository;
+- generate a Cursor API key;
+- approve the provider's pricing and data handling.
 
-1. *"Which agent backend? `cursor-api` (default, adapter shipped) · `http` (adapter shipped) · `claude-code-remote` / `codex-cloud` (no adapter shipped — route through `http` or write your own)."*
-2. For `cursor-api`: *"One shared `CURSOR_API_KEY` for the repo (default), or per-user tokens (see Alternatives)?"*
-3. For `http`: *"What is the URL Rondo should POST dispatch payloads to?"* — record as `<httpUrl>`.
+Workflow configuration:
 
-All answers land in the workflow file from Brick 4 — there is no separate config file to edit.
+```yaml
+with:
+  agent-backend: cursor-api
+  request-timeout-seconds: "120"
+env:
+  GH_TOKEN: ${{ github.token }}
+  CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+```
 
-## Steps
+Print, do not run with or inspect the value:
 
-In each case below, edit `.github/workflows/rondo.yml` (created by Brick 4) to keep only the env vars and `with:` entries for the chosen backend. Every other `*_API_KEY` / `*_OAUTH_TOKEN` / `*_ENV_ID` line should be removed.
+```bash
+gh secret set CURSOR_API_KEY
+```
 
-### If `cursor-api` (default)
+Cursor's API is an external, evolving surface. A timeout or workflow failure does not prove the remote agent stopped; inspect Cursor and GitHub before retrying.
 
-**Prerequisite (tell the human, do not attempt yourself):** the **Cursor GitHub App** must be installed on this repository. The adapter dispatches with `openAsCursorGithubApp: true` (see [`action/src/adapters/cursor-api.mjs`](../action/src/adapters/cursor-api.mjs)); without the App installed, the first dispatch silently fails to open a PR and you only notice at the next cycle. Verify at **https://github.com/apps/cursor-agent** → *Configure* → add this repo. If the human is not an admin on the repo, they need to ask one.
+## Generic HTTP adapter
 
-1. The workflow's `with:` block already has `agent-backend: "cursor-api"` as the default — no change needed unless you previously set something else. The `env:` block should contain:
+Require an existing receiver and read its operational contract before configuring it.
 
-   ```yaml
-   env:
-     GH_TOKEN: ${{ github.token }}
-     CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-   ```
+```yaml
+with:
+  agent-backend: http
+  http-url: https://agents.example.internal/rondo/dispatch
+  http-allow-insecure: "false"
+  request-timeout-seconds: "120"
+env:
+  GH_TOKEN: ${{ github.token }}
+  RONDO_HTTP_SECRET: ${{ secrets.RONDO_HTTP_SECRET }}
+```
 
-2. Print to the human (do **not** run):
+Print if a shared secret is used:
 
-   ```bash
-   gh secret set CURSOR_API_KEY
-   ```
+```bash
+gh secret set RONDO_HTTP_SECRET
+```
 
-   Tell them: "run this now; it will prompt for the key value. You generate the key in your Cursor dashboard → API keys."
+The adapter sends `Idempotency-Key`. When a shared secret is configured, it also sends `X-Rondo-Timestamp` and `X-Rondo-Signature: sha256=<hex>`, an HMAC-SHA256 of `<timestamp>.<exact-body>`. The receiver must use a timing-safe comparison and reject stale timestamps. Use HTTPS. Set `http-allow-insecure: true` only after explicit approval for a controlled environment.
 
-### If `claude-code-remote` or `codex-cloud`
+The receiver must return a valid agent ID and actual branch name, and must own cloning, authorization, agent execution, pushing, and PR creation. See `action/src/adapters/CONTRACT.md`.
 
-> **⚠ No adapter is shipped for these backends in v0.3.** Setting `agent-backend: "claude-code-remote"` or `"codex-cloud"` directly will crash the runner (see [`action/src/index.mjs`](../action/src/index.mjs), which explicitly throws for these values).
->
-> Two options:
-> 1. **Use the `http` backend below** and have your own receiver forward dispatches to Claude Code remote or Codex Cloud. This is the recommended path today.
-> 2. **Write a dedicated adapter** at `action/src/adapters/<name>.mjs` conforming to [`action/src/adapters/CONTRACT.md`](../action/src/adapters/CONTRACT.md), wire it in `action/src/index.mjs`, and open a PR against the Rondo repo.
+## Timeouts, retries, and cost
 
-### If `http`
-
-1. Ask the human for the dispatch URL and (optional) shared secret. Record the URL as `<httpUrl>`.
-2. In `with:`, set both `agent-backend` and `http-url` — the runner rejects `agent-backend: "http"` with an empty `http-url`:
-
-   ```yaml
-   with:
-     agent-backend: "http"
-     http-url: "<httpUrl>"
-   env:
-     GH_TOKEN: ${{ github.token }}
-     RONDO_HTTP_SECRET: ${{ secrets.RONDO_HTTP_SECRET }}
-   ```
-
-   (`http-url` is a plain input, not a secret — the URL itself isn't sensitive. Only the shared secret is.)
-
-3. Print: `gh secret set RONDO_HTTP_SECRET` (skip if the human declined a shared secret).
-4. Tell the human their receiver is responsible for: cloning the repo, running the agent with the passed prompt + ticket context, opening a PR on the agreed branch. See [`SPEC.md §8`](../SPEC.md) for the dispatch contract.
-
-## Alternatives (documented, not implemented by default)
-
-- **Per-user Cursor tokens** — each ticket's `owner:` frontmatter maps to that user's `CURSOR_API_KEY_<GH_USER>` secret, so usage is billed to the right dev. Nice for cost attribution and fair-share. Not implemented in v0.3; easy addition to the Cursor adapter (read secret name from `owner`).
-- **Claude.ai web (Projects / Agents)** — no public API as of today; would need a browser-automation adapter (Playwright in a GH Action). Brittle, not recommended, not implemented.
-- **Twill** — if you're running Twill as your "agent fleet manager", point Rondo at Twill's dispatch endpoint via the `http` backend. Not a dedicated adapter yet, but the HTTP contract is enough.
-- **Self-hosted model (Ollama, vLLM, …)** — use the `http` backend to call your own inference endpoint. The agent side (clone repo, edit files, push branch, open PR) is on you. Not trivial.
-- **Multi-backend fallback** — dispatch to Cursor, and if that fails, to Claude Code, and if that fails, to Codex. In production at OVRSEA but not yet generalized in the OSS code; the adapter interface supports it.
-- **A cloud sandbox (Anthropic/OpenAI managed agents)** — if the provider you use ships a managed agents product, write a thin adapter against its API. Follows the same 4-field dispatch contract.
+- Each network request uses `request-timeout-seconds`.
+- The shipped adapters do not blindly retry dispatch POSTs. A receiver should honor the idempotency key before adding retries.
+- An adapter failure consumes the cycle's dispatch-cap slot.
+- A timed-out request may still be running remotely.
+- Every successful or ambiguous dispatch may incur provider cost.
 
 ## Self-check
 
-- [ ] `.github/workflows/rondo.yml` `with:` block declares the chosen `agent-backend` (or leaves it at the default `cursor-api`).
-- [ ] The `env:` block contains only the secret(s) for the chosen backend.
-- [ ] For `http`: `with: http-url: "<httpUrl>"` is set.
-- [ ] The human has been told exactly which `gh secret set ...` command to run.
-- [ ] (Reminder to the human) the secret must be set before the first scheduled run, or the workflow will fail loudly.
+- The workflow names only a shipped backend.
+- Unused secret variables are removed.
+- URL transport and data destination were approved.
+- Human-owned App/secret tasks are explicit.
+- The first real cycle is capped at one dispatch.

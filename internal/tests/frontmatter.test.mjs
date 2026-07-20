@@ -56,6 +56,26 @@ test("preserves unknown keys (forward-compat per SPEC §3.2)", () => {
   assert.equal(frontmatter.x_custom, "hello");
 });
 
+test("preserves __proto__ as inert extension data", () => {
+  const content = "owner: a\npriority: 0\nmodel: default\n__proto__: extension-value\n\n# t";
+  const parsed = parseFrontmatter(content);
+
+  assert.equal(Object.getPrototypeOf(parsed.frontmatter), Object.prototype);
+  assert.equal(Object.hasOwn(parsed.frontmatter, "__proto__"), true);
+  assert.equal(parsed.frontmatter.__proto__, "extension-value");
+  assert.match(serializeFrontmatter(parsed), /__proto__: extension-value/);
+});
+
+test("serialize ignores inherited names that are not frontmatter keys", () => {
+  const out = serializeFrontmatter({
+    frontmatter: { owner: "a" },
+    order: ["constructor", "owner"],
+    body: "# t",
+  });
+
+  assert.equal(out, "owner: a\n\n# t");
+});
+
 test("handles CRLF line endings", () => {
   const content = "owner: a\r\npriority: 2\r\nmodel: default\r\n\r\n# t";
   const { frontmatter } = parseFrontmatter(content);

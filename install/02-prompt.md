@@ -1,66 +1,41 @@
-# Brick 2 — Prompt
+# Brick 2 — Agent prompt
 
-## What it does
+## Purpose
 
-Sets the instructions the dispatched agent receives every cycle. The prompt is what tells the agent: "read the ticket, choose one of four outputs, always open exactly one PR."
+Choose the instructions sent on every dispatch while preserving the portable Rondo agent contract.
 
-## Default we ship
+## Default
 
-The reference prompt is [`PROMPT.md`](../PROMPT.md) bundled with the Rondo action. The runner loads it automatically. You install **nothing** by default — it's already in effect as soon as Brick 4 (scheduler) is installed.
+Install no file. The Action loads the `PROMPT.md` bundled at the same immutable `<RONDO_REF>` as the runner.
 
-Why this default: one canonical prompt, versioned with the action, reviewable by the OSS community, easy to diff when the method evolves. Teams that need to customize do so **locally per host repo**, not by forking Rondo.
+The default requests exactly one relevant PR, reuse of a matching PR on retry, one ticket update, the agreed head/base branches, and one of four outcomes. The reference runner requests but does not verify those properties.
 
-## Convention-based override (no config)
+## Optional host additions
 
-If the host repo contains a file named exactly `rondo.prompt.md` **at the repo root**, the runner picks it up automatically. There is no config key, no path indirection — the filename is the contract.
+Ask whether the host needs repository-specific rules. Prefer a short prepend over a full replacement.
 
-Behavior of the override file:
+- `rondo.prompt.md` whose first non-empty line is **not** `# Rondo agent prompt` is prepended to the bundled prompt.
+- A file beginning with `# Rondo agent prompt` fully replaces the bundled prompt.
 
-- If it starts with `# Rondo agent prompt` (same H1 as the bundled file), it **replaces** the bundled prompt.
-- Otherwise, it is **prepended** to the bundled prompt — the host's additions come first, then the bundled prompt verbatim, separated by a `---` rule.
+For a prepend, create only the additions—do not include a trailing separator because the loader adds one:
 
-This is implemented in [`action/src/lib/prompt-loader.mjs`](../action/src/lib/prompt-loader.mjs).
+```markdown
+# Repository-specific Rondo additions
 
-## Questions to ask the human
+- Read AGENTS.md before editing.
+- Run the checks required by CONTRIBUTING.md.
+- Never change generated files by hand.
+```
 
-1. *"Do you want to customize the agent prompt for this repo? (default: no — use the Rondo default)"*
-2. If yes: *"How much do you want to change? (a) Small additions on top of the default (preferred), (b) Full override."*
+For a full override, copy `PROMPT.md` from the exact reviewed `<RONDO_REF>`, then edit it. Warn that removing retry awareness, branch rules, or the ticket-update requirement makes agents less interoperable; it does not change what the runner can verify.
 
-## Steps
+## Security
 
-**If the human picked "no" (default):** skip this brick. Nothing to install — the bundled `PROMPT.md` is used automatically.
-
-**If the human picked "(a) small additions":**
-
-1. Write `rondo.prompt.md` at the host repo root with a short prepend (do **not** start it with `# Rondo agent prompt` — that triggers full-replacement mode):
-
-   ```markdown
-   # Team-specific additions to the Rondo prompt
-
-   > The Rondo default prompt follows below verbatim. The lines above are additions specific to this repo.
-
-   - <team-specific rule 1>
-   - <team-specific rule 2>
-
-   ---
-   ```
-
-2. Tell the human: "the runner will automatically concatenate your additions with the default — no config needed."
-
-**If the human picked "(b) full override":**
-
-1. Copy the content of [`PROMPT.md`](../PROMPT.md) from the Rondo repo into `rondo.prompt.md` at the host repo root. **Keep the `# Rondo agent prompt` H1** at the top — that's the marker that tells the runner to use this file as a full replacement.
-2. Tell the human to edit it. **Warn them clearly:** removing hard invariants (one PR per cycle, always modify the `.md`, push to `<BRANCH_NAME>` against `<BASE_BRANCH>`) will break the scheduler's eligibility checks and the registry mapping.
-
-## Alternatives (documented, not implemented by default)
-
-- **Per-ticket prompt override** — a ticket could carry a `prompt:` frontmatter key pointing to a custom prompt file. Useful for experimental tickets. Not in v0.3; open a PR if you want this.
-- **Prompt-as-code** — load the prompt from a JS/TS function so it can be templated with ticket metadata. Risk: drift from the canonical Markdown form. Not implemented.
-- **Prompt served from a remote URL** — fetched at dispatch time. Useful for orgs with central prompt governance. Not implemented; easy to add as an `INPUT_PROMPT_URL` action input in a follow-up.
-- **Rename the convention file** — if `rondo.prompt.md` clashes with something in your repo, the only way today is to fork the action and edit `prompt-loader.mjs`. Deliberate — keeping the convention name fixed is the whole point of "no config".
+The complete resulting prompt is sent to the configured agent provider or HTTP receiver. Do not place credentials, customer data, or private operational instructions in it unless that destination is approved to receive them.
 
 ## Self-check
 
-- [ ] If skipped: no `rondo.prompt.md` exists at the host repo root — the bundled [`PROMPT.md`](../PROMPT.md) is used automatically.
-- [ ] If "(a) small additions": `rondo.prompt.md` exists at the repo root and does **not** start with `# Rondo agent prompt`.
-- [ ] If "(b) full override": `rondo.prompt.md` exists at the repo root and **does** start with `# Rondo agent prompt`.
+- No override exists unless requested.
+- A prepend does not accidentally trigger full replacement.
+- A full override came from the same immutable ref as the Action.
+- The final prompt contains no secret and retains the core agent contract.

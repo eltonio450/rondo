@@ -1,104 +1,100 @@
-# Brick 4 — Scheduler
+# Brick 4 — Scheduler and reference configuration
 
-## What it does
+## Purpose
 
-Fires the runner on a cadence **and** configures every runtime knob in the same file. The runner scans the tickets directory, evaluates eligibility, and dispatches one agent per eligible ticket. The workflow YAML created in this brick is **the only config surface** — there is no separate `rondo.config.json`.
+Add the serialized GitHub Actions workflow that scans tickets and owns the reference runner inputs.
 
-## Default we ship
+## Decisions
 
-**A GitHub Action on an hourly cron.** The workflow lives at `.github/workflows/rondo.yml` in the host repo and calls the reusable action `eltonio450/rondo/action@v0.3`.
+Confirm schedule, ticket directory, detected base branch, immutable `<RONDO_REF>`, capacity, request timeout, and whether manual dispatch is enabled. Start manual-only during a pilot.
 
-Why this default:
-- You already use GitHub Actions. No new infra to host.
-- One file to configure Rondo — no separate JSON config to keep in sync.
-- Hourly is fast enough for human-scale teams (agents pick up the next step within an hour of the previous PR merging) and slow enough that even a 3.2M-line monorepo stays well under GitHub Actions' free tier.
-- `workflow_dispatch` is included so humans can trigger off-cycle from the Actions UI when they just merged a PR and want the next step now.
-- `concurrency: group: rondo-runner` guarantees no two runners race. Combined with the hourly cadence, this is also what keeps the system safe from double-dispatch without any persisted "in-flight" status.
+## Workflow
 
-## Questions to ask the human
+Create `.github/workflows/rondo.yml` without overwriting an existing file. Pin both Rondo and third-party Actions to reviewed immutable commits.
 
-1. *"Schedule: hourly (default) or something else?"* — accept any valid cron; record as `<cron>`.
-2. *"Allow manual triggering from the Actions UI? (default: yes)"*
-3. *"Workflow name in the Actions tab? (default: `Rondo Runner`)"*
-4. *"Tickets directory (from Brick 1)? (default: `tickets`)"* — record as `<ticketsDir>`.
-5. *"Base branch the runner targets? (default: the repo's default branch detected during pre-flight)"* — record as `<baseBranch>`.
+```yaml
+name: Rondo Runner
 
-## Steps
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Discover and plan without dispatching
+        type: boolean
+        default: true
+      max_dispatches:
+        description: Dispatch-attempt cap for this manual run
+        type: number
+        default: 1
+  # Enable only after the controlled pilot:
+  # schedule:
+  #   - cron: "0 * * * *"
 
-1. Create `.github/workflows/rondo.yml`:
+concurrency:
+  group: rondo-runner
+  cancel-in-progress: false
 
-   ```yaml
-   name: Rondo Runner
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
 
-   on:
-     schedule:
-       - cron: "0 * * * *" # every hour — replace with <cron> if different
-     workflow_dispatch:
-       inputs:
-         dry_run:
-           description: "Log eligible tickets without launching agents"
-           type: boolean
-           default: false
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: eltonio450/rondo/action@<RONDO_REF>
+        with:
+          dry-run: ${{ inputs.dry_run }}
+          tickets-dir: "<ticketsDir>"
+          base-branch: "<baseBranch>"
+          agent-backend: cursor-api
+          max-dispatches-per-cycle: ${{ inputs.max_dispatches }}
+          request-timeout-seconds: "120"
+          http-allow-insecure: "false"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+```
 
-   concurrency:
-     group: rondo-runner
-     cancel-in-progress: false
+`<RONDO_REF>` must be a full reviewed commit SHA. The `actions/checkout` SHA above is the one reviewed by Rondo's own CI at the time of writing; replace it only with another reviewed immutable SHA required by host policy. Replace all angle-bracket values before delivery.
 
-   permissions:
-     contents: read
-     issues: write
-     pull-requests: read
+For HTTP, Brick 5 changes the backend, URL, and secret. Do not retain unused backend secrets.
 
-   jobs:
-     dispatch:
-       runs-on: ubuntu-latest
-       timeout-minutes: 15
-       steps:
-         - uses: actions/checkout@v4
-         - uses: eltonio450/rondo/action@v0.3
-           with:
-             dry-run: ${{ inputs.dry_run }}
-             tickets-dir: <ticketsDir>
-             base-branch: <baseBranch>
-             # Uncomment/edit only the keys you want to override from the defaults:
-             # branch-prefix: "rondo/"
-             # agent-backend: "cursor-api"
-             # accepted-models: "claude-sonnet-4-6,cursor-fast"
-           env:
-             GH_TOKEN: ${{ github.token }}
-             # Brick 5 (Agent runner) adds one backend-specific secret env var here.
-             CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-   ```
+## Inputs
 
-2. Substitute `<cron>`, `<ticketsDir>`, and `<baseBranch>` with the human's answers. Default cron if not specified: `"0 * * * *"` (hourly).
-3. Adjust the `name:` per the human's answer. If manual triggering was declined, remove the `workflow_dispatch:` block (and the `${{ inputs.dry_run }}` reference — replace with `"false"`).
-4. Tell the human no secrets are set yet — Brick 5 handles the secrets specific to their chosen agent runner.
-
-**Inputs reference** (every knob Rondo accepts — all optional except when noted):
-
-| Input | Default | Meaning |
+| Input | Reference default | Notes |
 |---|---|---|
-| `dry-run` | `"false"` | Log eligible tickets without dispatching. |
-| `tickets-dir` | `"tickets"` | Directory containing ticket `.md` files. |
-| `branch-prefix` | `"rondo/"` | Prefix for agent branches (must end with `/`). |
-| `base-branch` | `"main"` | Branch PRs target and new branches are cut from. |
-| `agent-backend` | `"cursor-api"` | `cursor-api` · `claude-code-remote` · `codex-cloud` · `http`. |
-| `accepted-models` | `""` | Comma-separated allowlist (empty = accept any model). `"default"` is always accepted. |
-| `http-url` | `""` | **Required** when `agent-backend: "http"`. |
+| `dry-run` | `false` | No adapter construction or dispatch secret required. |
+| `tickets-dir` | `tickets` | Flat direct-child scanner. |
+| `branch-prefix` | `rondo/` | Suggested branch prefix. |
+| `base-branch` | `main` | Installer must replace with detected default. |
+| `agent-backend` | `cursor-api` | Shipped: `cursor-api`, `http`. |
+| `accepted-models` | empty | Empty accepts any; `default` is always accepted. |
+| `max-dispatches-per-cycle` | `10` | `1..1000`; there is no unlimited mode. Failed attempts consume capacity. |
+| `request-timeout-seconds` | `120` | Integer `1..3600`; per-request network timeout. |
+| `http-url` | empty | Required for HTTP. HTTPS by default. |
+| `http-allow-insecure` | `false` | Explicit cleartext HTTP opt-in. |
 
-## Alternatives (documented, not implemented by default)
+The Action runs on Node 24; the host repo installs no Node dependency.
 
-- **Different cron cadence** — every 15 min, every 4 hours, weekdays only. Already supported — just edit the `cron:` line.
-- **Webhook-triggered runner** — fire on `push` to `main` so the runner scans as soon as a ticket is committed. Useful for teams that want near-real-time dispatch. Trivial to add: change the `on:` block. Caveat: still serialize via `concurrency:`.
-- **Manual-only runner** — drop `schedule:`, keep `workflow_dispatch:`. For teams piloting Rondo who want to dispatch by hand at first.
-- **External cron (not GitHub Actions)** — a cron job on your own infra that calls the runner script directly. Requires packaging the runner as an npm binary (not shipped as such in v0.3; the reusable Action is the contract).
-- **Event-driven runner via GitHub Apps** — a dedicated Rondo GitHub App listening to `push` / `pull_request` events. Tighter coupling, no Actions minutes used. Not implemented; meaningful complexity to operate an App.
-- **Long-running worker (Kubernetes, ECS, Twill)** — a permanent process watching the repo. Eliminates cron startup latency; costs more to operate. Not implemented.
+## Delivery and smoke test
+
+Review, commit, push, and merge this workflow according to host policy **before** calling `gh workflow run`. The manual input defaults to a cap of `1`; scheduled events provide an empty input and the Action applies its safe default `10`. Passing `0` remains invalid and fails configuration instead of silently changing the cap.
+
+Run a controlled real cycle explicitly with:
+
+```bash
+gh workflow run rondo.yml -f dry_run=false -f max_dispatches=1
+```
 
 ## Self-check
 
-- [ ] `.github/workflows/rondo.yml` exists and references `eltonio450/rondo/action@v0.3`.
-- [ ] The cron matches the human's chosen cadence.
-- [ ] The `concurrency:` block is present.
-- [ ] `tickets-dir` and `base-branch` in the `with:` block match the human's answers.
-- [ ] No secret is set yet (Brick 5 prints the secret command).
+- No Rondo or third-party Action reference uses mutable `main` or an assumed release tag.
+- The workflow is serialized and least-privilege.
+- All placeholders are replaced.
+- The ticket directory/base branch match Brick 1 and discovery.
+- Manual runs expose a cap defaulting to `1`; scheduled runs retain the configured fallback.
+- The pilot is manual or conservatively scheduled.

@@ -43,6 +43,53 @@ test("invalid frontmatter — priority is a string", () => {
   assert.equal(isEligible(bad).reason, "invalid_frontmatter");
 });
 
+test("invalid frontmatter — priority must be an integer from 0 to 99", () => {
+  for (const priority of [-1, 1.5, 100]) {
+    const bad = {
+      ...baseInputs,
+      ticket: { ...baseTicket, frontmatter: { owner: "a", priority, model: "default" } },
+    };
+    assert.equal(isEligible(bad).reason, "invalid_frontmatter");
+  }
+});
+
+test("invalid frontmatter — owner must be a string", () => {
+  const bad = {
+    ...baseInputs,
+    ticket: { ...baseTicket, frontmatter: { owner: 123, priority: 2, model: "default" } },
+  };
+  assert.equal(isEligible(bad).reason, "invalid_frontmatter");
+});
+
+test("invalid frontmatter — model must be a string", () => {
+  const bad = {
+    ...baseInputs,
+    ticket: { ...baseTicket, frontmatter: { owner: "a", priority: 2, model: 456 } },
+  };
+  assert.equal(isEligible(bad).reason, "invalid_frontmatter");
+});
+
+test("invalid frontmatter — owner and model cannot be blank", () => {
+  const blankOwner = {
+    ...baseInputs,
+    ticket: { ...baseTicket, frontmatter: { owner: "   ", priority: 2, model: "default" } },
+  };
+  const blankModel = {
+    ...baseInputs,
+    ticket: { ...baseTicket, frontmatter: { owner: "a", priority: 2, model: "   " } },
+  };
+  assert.equal(isEligible(blankOwner).reason, "invalid_frontmatter");
+  assert.equal(isEligible(blankModel).reason, "invalid_frontmatter");
+});
+
+test("invalid frontmatter — owner must match the schema handle pattern", () => {
+  const bad = {
+    ...baseInputs,
+    ticket: { ...baseTicket, frontmatter: { owner: "not_a_handle", priority: 2, model: "default" } },
+  };
+  assert.equal(isEligible(bad).reason, "invalid_frontmatter");
+});
+
 test("unknown model (not in allowlist)", () => {
   const bad = {
     ...baseInputs,
@@ -119,18 +166,26 @@ test("paused: today → treated as absent (inclusive-start resume)", () => {
   assert.equal(isEligible(input).eligible, true);
 });
 
-test("paused: false → invalid_frontmatter (aligns runtime with CI schema)", () => {
-  const bad = {
+test("paused: false → treated as absent", () => {
+  const input = {
     ...baseInputs,
     ticket: { ...baseTicket, frontmatter: { ...baseTicket.frontmatter, paused: false } },
   };
-  assert.equal(isEligible(bad).reason, "invalid_frontmatter");
+  assert.equal(isEligible(input).eligible, true);
 });
 
 test("paused: non-date string → invalid_frontmatter", () => {
   const bad = {
     ...baseInputs,
     ticket: { ...baseTicket, frontmatter: { ...baseTicket.frontmatter, paused: "May 1 2026" } },
+  };
+  assert.equal(isEligible(bad).reason, "invalid_frontmatter");
+});
+
+test("paused: impossible calendar date → invalid_frontmatter", () => {
+  const bad = {
+    ...baseInputs,
+    ticket: { ...baseTicket, frontmatter: { ...baseTicket.frontmatter, paused: "2026-02-30" } },
   };
   assert.equal(isEligible(bad).reason, "invalid_frontmatter");
 });
@@ -169,6 +224,20 @@ test("depends with multiple entries — lists all unresolved", () => {
     existingTicketSlugs: ["t-one", "t-two", "t-three"],
   };
   assert.equal(isEligible(input).reason, "depends_on:t-two,t-three");
+});
+
+test("malformed dependency declarations are invalid frontmatter", () => {
+  const wrongType = {
+    ...baseInputs,
+    ticket: { ...baseTicket, frontmatter: { ...baseTicket.frontmatter, depends: 42 } },
+  };
+  const invalidSlug = {
+    ...baseInputs,
+    ticket: { ...baseTicket, frontmatter: { ...baseTicket.frontmatter, depends: "BAD_NAME" } },
+  };
+
+  assert.equal(isEligible(wrongType).reason, "invalid_frontmatter");
+  assert.equal(isEligible(invalidSlug).reason, "invalid_frontmatter");
 });
 
 test("open PR on the same branch → ineligible", () => {

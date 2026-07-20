@@ -1,177 +1,171 @@
 # Rondo
 
-> **Long-running Epics, shipped one PR at a time, automatically.**
+> A Git-native protocol and reference runner for turning long-lived work into small, reviewable pull requests.
 
-You write an Epic in a `.md` file in your repo — *"migrate the `orders` table, then update the backend API, then refactor the frontend to use it"*. Three steps. You commit the file and walk away.
+Rondo keeps an Epic as a Markdown file in the repository. On each scheduled cycle, a runner derives which tickets are eligible and asks background coding agents to advance a bounded set. Each ticket carries its mission, decisions, and progress across agents and across time.
 
-Every hour, Rondo dispatches a background AI agent (Cursor, Claude Code, Codex…)[^further-reading] that reads the Epic, picks up where the last PR left off, and ships **one PR for the next step**. You review and merge. Next hour, the agent resumes from your merge and ships the step after. **No relaunching. No re-prompting. No standup.**
+The repository ships two things:
 
-One Epic becomes a series of small, reviewable PRs. The Epic file itself accumulates decisions and progress history across all of them, so the next agent — even a week later, even a different model — picks up cleanly.
+- a small protocol: ticket format, eligibility, dispatch semantics, and branch mapping;
+- a reference GitHub implementation: a Node 24 Action, a GitHub Issue registry, and Cursor/HTTP dispatch adapters.
 
-**Everything lives in your repo** — the queue, the mission, the decisions, the progress history. Not in a SaaS, not in a DB. The only thing Rondo persists outside is a single GitHub Issue whose body carries a `slug → branchName` lookup, overwritten every cycle ([why](#why-one-github-issue)).
+It is a foundation to adapt, not a hosted control plane. GitHub, the scheduler, the registry transport, and the agent provider are ports around a deliberately small core.
 
-We've been running this for **6 months** on a 3.2M-line monorepo. **1,500+ PRs** auto-started. Open-sourcing the method now.
+> **Delivery semantics:** Rondo is **at least once**. It reduces duplicate work by checking open PR branches and by sending an idempotency key, but it cannot prove that a remote agent is still starting or that exactly one relevant PR exists. On retry, the prompt tells the agent to reuse a matching open PR instead of opening a second. These rules are instructions, not post-dispatch enforcement by the reference runner.
 
-## How it works
+## The loop
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#F8FAFC', 'primaryBorderColor': '#F8FAFC', 'primaryTextColor': '#0F172A', 'lineColor': '#94A3B8', 'fontSize': '14px', 'fontFamily': 'system-ui, -apple-system, sans-serif' }}}%%
-flowchart TD
-    subgraph FILES["📁 <b>tickets/</b> (in your repo)"]
-        direction LR
-        F1["task-a.md"]
-        F2["task-b.md"]
-        F3["task-c.md"]
-    end
-
-    A["👤 <b>A dev creates a .md file</b><br/>describing the full scope of work"]
-    A --> FILES
-
-    FILES -->|"every hour,<br/>each file is scanned"| CHECK
-    CHECK{"Is the ticket<br/>eligible?"}
-    CHECK -->|"PR already open<br/>or paused<br/>or blocked dependency"| SKIP["⏸ Skipped<br/><i>wait for next run</i>"]
-    CHECK -->|"no open PR,<br/>no blocker"| PICKUP
-
-    PICKUP["🤖 <b>An AI agent is launched</b><br/>given the path to the .md file<br/>and the branch to push to"]
-
-    subgraph AGENT["Agent's work (one PR per run, always)"]
-        direction TB
-        READ["📖 <b>Reads the .md file</b><br/><i>— summary &amp; tasks<br/>— progress from previous steps<br/>— decisions log</i>"]
-        DECIDE{"What to do<br/>this cycle?"}
-        CODE["💻 <b>(a) Progress</b><br/><i>code changes + update ticket</i>"]
-        PAUSE_OUT["⏸ <b>(b) Pause</b><br/><i>set paused: YYYY-MM-DD</i>"]
-        DONE_OUT["🏁 <b>(c) Done</b><br/><i>delete the .md file</i>"]
-        NOOP["🚧 <b>(d) No-op</b><br/><i>log blocker in decisions</i>"]
-        PR["🔀 <b>Opens a PR</b><br/><i>always — even for (b), (c), (d)</i>"]
-        READ --> DECIDE
-        DECIDE --> CODE
-        DECIDE --> PAUSE_OUT
-        DECIDE --> DONE_OUT
-        DECIDE --> NOOP
-        CODE --> PR
-        PAUSE_OUT --> PR
-        DONE_OUT --> PR
-        NOOP --> PR
-    end
-
-    PICKUP --> READ
-    PR --> REVIEW
-
-    REVIEW["👤 <b>Human review</b>"]
-    REVIEW -->|"requests changes"| CODE
-    REVIEW -->|"approves &amp; merges"| MERGED
-
-    MERGED["✅ <b>PR merged into prod</b><br/><i>the .md file on prod now contains<br/>the up-to-date history</i>"]
-    MERGED --> DONE_CHECK{"Any steps<br/>left in the file?"}
-
-    DONE_CHECK -->|"yes"| NEXT_HOUR["🔄 <b>Next hourly run</b><br/><i>file is re-scanned, agent re-reads<br/>the progress history and ships<br/>the next step</i>"]
-    DONE_CHECK -->|"no (file deleted)"| DONE["🏁 <b>Ticket done</b><br/><i>next cycle drops it from the registry</i>"]
-
-    NEXT_HOUR -->|"the .md carries<br/>all accumulated context"| CHECK
-
-    %% Styling — soft pastel fills, no visible borders (stroke = fill)
-    style FILES fill:#FEF3C7,stroke:#FEF3C7,color:#713F12
-    style AGENT fill:#FFE4E6,stroke:#FFE4E6,color:#881337
-    style SKIP fill:#F1F5F9,stroke:#F1F5F9,color:#475569
-    style DONE fill:#D1FAE5,stroke:#D1FAE5,color:#064E3B
-    style MERGED fill:#D1FAE5,stroke:#D1FAE5,color:#064E3B
-    style NEXT_HOUR fill:#DBEAFE,stroke:#DBEAFE,color:#1E3A8A
+flowchart LR
+    T["Ticket .md on the base branch"] --> E["Derive eligibility"]
+    E -->|"paused, blocked, invalid, or PR open"| S["Skip this cycle"]
+    E -->|"eligible and below cycle cap"| D["Dispatch through an adapter"]
+    D --> A["Remote coding agent"]
+    A --> P["Requested: one relevant PR + ticket update"]
+    P --> H["Human review and merge"]
+    H --> T
+    D --> R["Persist slug → branch mapping"]
 ```
 
-## What the agent gets every cycle
+One ticket can therefore produce many PRs. A normal cycle asks the agent to choose one outcome:
 
-Each dispatch hands the agent three inputs (ticket path, target branch, base branch) plus the prompt below. Full text: [PROMPT.md](PROMPT.md).
+1. **Progress** — implement the next reviewable step and update the ticket.
+2. **Pause** — record why work should wait and set `paused:`.
+3. **Done** — promote durable knowledge and remove or archive the ticket.
+4. **No-op** — document a blocker when neither progress nor pause fits.
 
-> **You are an AI coding agent running one cycle of a Rondo ticket.** Read `TICKET_FILE` in full — frontmatter, mission, steps, decisions log, progress history.
->
-> **Hard invariants:**
-> - You **MUST** open exactly one PR per cycle. Not zero, not two.
-> - You **MUST** modify the ticket `.md` file in the PR — even when you make no code changes.
-> - The PR head branch **MUST** be `<BRANCH_NAME>`; the base **MUST** be `<BASE_BRANCH>`.
->
-> **Then choose exactly one of four outputs:**
->
-> - **(a) Progress** — ship the next step. Append to `Progress history` and any non-obvious calls to `Decisions`. Commit code + ticket edit.
-> - **(b) Pause** — defer. Set `paused: YYYY-MM-DD` (or `paused: true`) in the frontmatter. No code change.
-> - **(c) Done** — retire. Promote durable knowledge into canonical docs, then delete the `.md` file. On the next cycle the runner drops the ticket from the registry.
-> - **(d) No-op** — document a blocker in `Decisions`. No code change. Still open a PR. Use sparingly — two (d) cycles in a row should become a (b).
+See [PROMPT.md](PROMPT.md) for the exact agent contract.
 
-Short by design. Rondo agents are smart; more rules hurt more than they help. Override per-repo by dropping a `rondo.prompt.md` file at your repo root — the runner picks it up automatically, no config needed (see [install/02-prompt.md](install/02-prompt.md)).
+## What is fixed, and what is a port
 
-## Features
+| Layer | Rondo invariant | Reference implementation | Replaceable? |
+|---|---|---|---|
+| Ticket | Markdown file plus line-based frontmatter | `tickets/<slug>.md` | Directory and authoring UX are configurable |
+| Eligibility | Derived from files, pause/dependencies, accepted models, and open PR branches | Pure Node module | Yes, if semantics remain compatible |
+| Scheduler | Repeated, serialized scans | GitHub Actions cron/manual run | Yes |
+| Dispatch | One request per selected ticket, bounded per cycle | Cursor API or generic HTTP | Yes, through the adapter contract |
+| VCS | Read open changes and maintain the branch registry | GitHub REST + one labelled Issue | Yes, through the VCS contract |
+| Agent behavior | Request one relevant PR that updates the ticket and is reused on retry | Bundled prompt | Yes, but weakening it weakens interoperability |
 
-- **A ticket is one `.md` file, committed.** Your queue is in your repo, versioned, reviewable, greppable. No external PM tool.
-- **Many PRs per ticket, orchestrated automatically.** Each step of a ticket is one small, reviewable PR. Once you merge, the next cycle picks up and ships the next step — no re-prompting, no manual relaunch. The ticket file accumulates the decisions log and progress history across all of them.
-- **Tickets can depend on other tickets.** `depends: ticket-a, ticket-b` in the frontmatter makes the queue a DAG — nothing dispatches until its blockers are done (i.e. their `.md` files are deleted).
-- **Tickets can be paused.** `paused: true` (indefinite) or `paused: 2026-05-01` (until a specific date). The runner skips paused tickets without side effects; the date is inclusive-start.
-- **Per-ticket model choice.** `model: default` or a backend-specific alias (`claude-sonnet-4-6`, `cursor-fast`, etc.). Heavy work gets heavy models; cleanup work gets cheap ones.
-- **Per-ticket priority.** `priority: 0–99`. Lower numbers dispatch first. Tie-break by filename.
-- **One PR per run, always.** Even when the agent decides there's nothing to do, it opens a PR documenting why. No silent runs.
-- **Open-PR guard.** If a PR is already open for a ticket, the runner skips — no duplicate agents, no race.
-- **One Issue, not one per ticket.** A single registry Issue carries the `slug → branchName` lookup. Rewritten every cycle. No state machine, no labels to keep in sync, no webhook to wire.
-- **Agent-agnostic.** Default backend is Cursor Background Agents. Swap in Claude Code remote, Codex Cloud, or your own HTTP endpoint — the contract is a 3-field dispatch call.
-- **Self-resuming across days, weeks, or model changes.** Each ticket carries its own decisions log and progress history. The next cycle picks up where the last left off, even if the last cycle was weeks ago or used a different model.
-- **Zero SaaS, MIT.** One reusable GitHub Action. No pricing page. Fork it, ship it, resell it — no gotcha.
+The boundaries and porting guide live in [ADAPT.md](ADAPT.md). Adapter and VCS implementations have their own contracts in [action/src/adapters/CONTRACT.md](action/src/adapters/CONTRACT.md) and [action/src/vcs/CONTRACT.md](action/src/vcs/CONTRACT.md).
+
+## Ticket example
+
+Rondo frontmatter is intentionally not YAML: it is parsed one `key: value` line at a time until the first blank line.
+
+```markdown
+owner: alice
+priority: 2
+model: default
+depends: migrate-orders
+
+# Update order creation
+
+## Mission
+Move order creation to the new schema without changing the public API.
+
+## Steps (1 PR each)
+
+### Step 1 — Add the compatibility write path
+### Step 2 — Move readers to the new columns
+### Step 3 — Remove the compatibility path
+
+## Decisions (newest first)
+
+## Progress history (newest first)
+```
+
+Required keys are `owner`, `priority`, and `model`. Optional keys include `depends` and `paused`. Full normative rules are in [SPEC.md](SPEC.md); CI validation is described in [install/06-validate-tickets.md](install/06-validate-tickets.md).
+
+## Reference implementation
+
+The shipped Action currently supports:
+
+- **`cursor-api`** — direct dispatch to Cursor Background Agents;
+- **`http`** — POST to a receiver you operate, using the portable adapter contract.
+
+Dedicated Claude Code and Codex Cloud adapters are **not shipped**. They can be reached through an HTTP receiver or implemented as new adapters. “Portable” means the boundaries are documented; it does not mean every provider works without integration code.
+
+The reference runner also provides:
+
+- priority ordering and `max-dispatches-per-cycle` (default `10`);
+- an accepted-model allowlist;
+- request timeouts (`request-timeout-seconds`, default `120`);
+- HTTP URL validation, with cleartext HTTP disabled unless `http-allow-insecure: true`;
+- a deterministic dispatch idempotency key;
+- dry-run discovery without dispatch credentials;
+- one GitHub registry Issue containing `slug → branchName`.
+
+The idempotency key is a cooperation mechanism, not an exactly-once guarantee: a backend must honor it for duplicate requests to collapse.
 
 ## Install
 
-Ask your coding agent:
+### Prerequisites
 
-> Read [INSTALL.md](INSTALL.md) and install Rondo in this repo.
+- a GitHub repository and permission to add workflows;
+- GitHub Actions enabled;
+- `gh` authenticated for the repository if following the guided install;
+- Node 24 only for local development—the Action supplies its own runtime;
+- for Cursor: a `CURSOR_API_KEY` and the Cursor GitHub App installed on the target repository;
+- for HTTP: an HTTPS receiver that implements the adapter contract.
 
-The agent will walk you through the bricks (tickets folder, registry, scheduler, agent runner, prompt, optional extras), asking questions when choices need your input. There is no separate config file — every runtime knob is an input in the workflow file the scheduler brick creates.
+The install is intentionally reviewable. It should go through the host repository's normal branch/PR policy. Do not try to dispatch the new workflow before its workflow file exists on GitHub.
 
-See [INSTALL.md](INSTALL.md) for the modular menu, [SPEC.md](SPEC.md) for the normative spec, and [PROMPT.md](PROMPT.md) for the default agent prompt.
+Ask a coding agent:
 
-## Why it works
+> Read `INSTALL.md` from the reviewed Rondo source at `<RONDO_REF>` and install the recommended reference profile in this repository. Preserve existing files, use a branch or PR if required, and stop before setting secrets.
 
-- **Tickets are committed** — the queue is in your repo, versioned, reviewable, mergeable
-- **The ticket file is the memory** — decisions log + progress history accumulate across every PR, so the next cycle (hours or weeks later) picks up with full context
-- **State is derived, not tracked** — every cycle, Rondo recomputes each ticket's status from the filesystem + the repo's open PRs. No state machine to get out of sync, no webhook to wire
-- **Visibility is built-in** — the registry Issue is a live dashboard your team already watches in the Issues tab
-- **One PR per cycle** — small, reviewable diffs; the human stays in the loop without standup
+`<RONDO_REF>` must be an immutable reviewed commit SHA. A release tag may help humans discover a version, but production workflow examples deliberately do not rely on a movable tag or on `main`.
 
-## Why one GitHub Issue
+The practical sequence is:
 
-In principle, everything Rondo needs could live in the `.md` files themselves — the queue, the history, the decisions. In practice, Rondo needs one question answered every cycle: **"which branch is the current dispatch for ticket X working on?"**
+1. discover the repository policy and existing Rondo footprint;
+2. create the ticket, workflow, and optional validation files;
+3. review and push them through the repository's normal merge path;
+4. set the chosen backend secret;
+5. run `workflow_dispatch` with `dry_run: true`;
+6. run one controlled real dispatch.
 
-If every agent backend let you choose the branch at launch, no external state would be needed — the runner could derive `rondo/<slug>` by convention and check for an open PR on that branch directly. But some backends don't: [Cursor's Background Agents API auto-generates the branch](https://forum.cursor.com/t/issue-with-autobranch-parameter-and-autocreatepr-functionality/152294/10), and the mapping isn't knowable until the dispatch returns. So Rondo persists the `slug → branchName` mapping.
+Detailed, preservation-aware instructions are in [INSTALL.md](INSTALL.md).
 
-That mapping lives in the body of **one** long-lived GitHub Issue — the *registry Issue* — identified by the label `rondo-registry`. The runner rewrites the body every cycle with current reality:
+## Cost, data, and operational expectations
 
-- A machine-readable JSON block `<!-- rondo-registry {...} -->`
-- A human-readable table of all tickets, their current branch, and a derived state
+- Every selected ticket can start a paid remote-agent run. Keep the default cycle cap, start with manual dispatch, and monitor provider usage before increasing cadence or capacity.
+- The selected agent provider receives the repository identity, ticket path, branch/base names, model, and prompt; it generally clones the repository under its own authorization.
+- The generic HTTP adapter sends that metadata and prompt to the configured receiver. HTTPS is required by default.
+- GitHub Actions logs include ticket slugs, agent identifiers, branches, and errors. Do not put secrets in ticket text or prompt overrides.
+- A dispatch may complete remotely after the workflow times out. Inspect open PRs and provider state before manually retrying.
 
-No per-ticket Issues, no status labels, no state machine. The ticket files and the repo's open PRs are the sources of truth; the registry is just a lookup table.
+See [SECURITY.md](SECURITY.md) for the trust model and deployment checklist.
 
-A nice side-effect: **visibility for free**. Teams already watch the Issues tab — no dashboard to host, no new UI to learn.
+## Honest limits
 
-If your backend lets you choose the branch at launch (so `rondo/<slug>` is always correct), the registry becomes cosmetic — the mapping is always derivable. Rondo still maintains it because the human-readable table is useful, but the runner would work without it.
+- The runner does not inspect a remote agent after dispatch and does not verify PR count, diff contents, or mergeability.
+- A dispatch that has not opened a PR by the next cycle may be sent again.
+- The required `owner` is context for agents and humans; the reference runner does not assign reviewers or send notifications.
+- Priority controls ordering, not a global cost budget. The cycle cap is the hard dispatch bound.
+- The validator checks ticket syntax and dependency cycles among present files; a missing dependency file means “already completed” by protocol and cannot always be distinguished from a typo.
 
-## The spec, abridged
+## Repository map
 
-Rondo maintains **one long-lived GitHub Issue** per host repo:
+- [SPEC.md](SPEC.md) — normative v0.4 protocol.
+- [PROMPT.md](PROMPT.md) — default agent instructions.
+- [INSTALL.md](INSTALL.md) and [`install/`](install/) — guided reference installation.
+- [ADAPT.md](ADAPT.md) — architecture and porting guide.
+- [`action/`](action/) — reference GitHub runner.
+- [`schemas/ticket.schema.json`](schemas/ticket.schema.json) — ticket frontmatter schema.
+- [`skills/`](skills/) — standalone author/install/resume helpers.
+- [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [CHANGELOG.md](CHANGELOG.md) — operations and project governance.
 
-- **Title:** `[Rondo] Ticket registry`
-- **Label:** `rondo-registry` (how the runner finds it)
-- **Body:** a `<!-- rondo-registry {...} -->` JSON block with `slug → branchName` + a human-readable table, rewritten at the end of every cycle
+## Development
 
-No per-ticket Issues. No status labels. No `Refs #` required in agent PRs. A ticket's state (eligible / in flight / paused / blocked / gone) is derived every cycle from the filesystem and the list of open PRs — nothing is persisted to transition.
+```bash
+cd action
+npm test
+```
 
-Full normative spec: [SPEC.md](SPEC.md).
-
-## Where this is going — three principles we're betting on
-
-Rondo isn't just a task dispatcher. It's a bet on where agent-assisted software development is headed. We'll keep shipping this repo along these three lines.
-
-1. **Tickets live in the code.** Not in a SaaS, not in a synced mirror — in `.md` files committed to your repo. The queue is git. If Rondo disappears tomorrow, your tickets are still yours, versioned with your code. The broader bet: specs, prompts, and agent tracking all belong alongside the code they drive, not in a parallel system that drifts.
-
-2. **A ticket is not a PR.** The "one ticket = one PR" model forces you to choose between giant PRs (unreviewable) and splitting tickets artificially (bureaucracy). Rondo decouples them: one ticket file is a stream of PRs, orchestrated automatically across cycles. The `.md` file is the persistent unit that carries decisions and progress across PRs; each PR is disposable, small, and mergeable on its own. You never re-prompt — the next cycle reads where the last one left off.
-
-3. **A PR is not one review.** Every non-trivial change actually needs three: a **domain review** (does this match the product intent?), an **engineering review** (is the design sound, does it fit the codebase?), and a **quality review** (does it work in a realistic environment?). These are three questions, best answered by three different people at three different times — often across different PRs on the same ticket. Rondo doesn't force them to collapse into one moment; the ticket file is where they converge over time.
+The reference Action targets Node 24 and has no runtime dependencies. Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing a protocol boundary.
 
 ## License
 
-[MIT](LICENSE). Use it, fork it, ship it, resell it. No managed service planned — this is pure open source.
-
-[^further-reading]: For readers who want to zoom out: Rondo sits in the **"scheduled agents / agent fleets"** space ([background-agents.com](https://background-agents.com/)) and is a building block toward what OpenAI calls [**harness engineering**](https://openai.com/index/harness-engineering/).
+[MIT](LICENSE). Rondo itself has no hosted service or control plane; your chosen VCS and agent provider may be hosted services with their own pricing and data policies.

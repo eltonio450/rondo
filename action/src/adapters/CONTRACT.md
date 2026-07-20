@@ -1,76 +1,139 @@
-# Adapter contract
+# Agent adapter contract — v0.4
 
-An **adapter** is the only piece of Rondo's runner that depends on the installing team's environment. Everything else in [`action/src/`](../) is environment-independent and fully implemented; adapters are where each team plugs in whichever background-agent service they use (Cursor, Claude Code, Codex Cloud, an in-house HTTP endpoint, a self-hosted model, …).
+An adapter is the dispatch port between the Rondo runner and one remote coding-agent service. It launches or requests one agent and returns the branch that service will actually use.
 
-This file is the **normative contract** that every adapter must satisfy. The runner is coded against this shape and nothing else.
+It does not scan tickets, decide eligibility, write the registry, clone the repository locally, or verify the later PR.
 
-## The one thing an adapter does
-
-> **"At this moment in the cycle, create a background coding agent that will work on a specific ticket. Tell me the agent's ID and the branch it's going to push to."**
-
-That's it. One input, one output. Everything Rondo does around it (scanning tickets, eligibility, registry maintenance) is already handled by the runner — the adapter just has to dispatch one agent and come back with a handle on what it dispatched.
-
-## Signature
+## Interface
 
 ```js
-/**
- * @param {object} input
- * @param {string} input.repoFullName    — "owner/repo", for backends that need it.
- * @param {string} input.ticketFile      — Path (relative to repo root) of the ticket .md file.
- * @param {string} input.suggestedBranch — Branch name the runner would like the agent to use
- *                                         (from the registry for re-dispatches, or
- *                                         `<branchPrefix><slug>` on first dispatch). Some
- *                                         backends (e.g. Cursor Background Agents) auto-generate
- *                                         the branch and ignore this hint — that's fine, just
- *                                         return the real branch.
- * @param {string} input.baseBranch      — Branch to PR against (e.g. "main").
- * @param {string} input.model           — Model identifier. "default" means "pick for me".
- * @param {string} input.prompt          — Full prompt text (already loaded + merged).
- *
- * @returns {Promise<{ agentId: string, branchName: string }>}
- *   agentId    — Opaque identifier. Logged for observability; Rondo does not call back with it.
- *   branchName — The branch the agent will actually push to. If the backend honors
- *                `suggestedBranch`, return it verbatim. If the backend generates its own
- *                branch (Cursor does), return whatever the backend told you.
- */
-async function dispatch(input) { ... }
+async function dispatch({
+  repoFullName,
+  ticketFile,
+  suggestedBranch,
+  baseBranch,
+  model,
+  prompt,
+  idempotencyKey,
+}) {
+  return { agentId, branchName };
+}
 ```
 
-## Why `branchName` must be part of the return value
+### Inputs
 
-The runner persists `branchName` in the registry Issue so that, on subsequent cycles, it can match an open PR against the right branch for each ticket — especially when the backend chose a branch name that doesn't follow the `<branchPrefix><slug>` convention.
-
-Some backends — notably [Cursor Background Agents](https://forum.cursor.com/t/issue-with-autobranch-parameter-and-autocreatepr-functionality/152294/10) — auto-generate the branch and only reveal it after the dispatch call returns. Others (a generic HTTP receiver, a CLI runner) let you choose. The contract accommodates both: the runner passes a **suggestion** (`suggestedBranch`), the adapter returns the **reality** (`branchName`).
-
-## Error semantics
-
-The adapter **MUST** throw on any non-recoverable failure (bad credentials, quota exceeded, unreachable endpoint, 5xx). The runner catches, logs it, and counts the ticket as `failed` for this cycle. Do **not** return `{ agentId: "error", branchName: "" }` to signal failure — that would record a phantom dispatch in the registry.
-
-Recoverable failures (rate limits, transient 503) SHOULD be retried inside the adapter with exponential backoff before throwing.
-
-## What an adapter MUST NOT do
-
-- **Write to the registry Issue.** The runner owns its body.
-- **Open the PR itself.** That's the dispatched agent's job, per [PROMPT.md](../../../PROMPT.md).
-- **Clone the repo, checkout files, run the agent inline.** All of that is the backend's responsibility. An adapter is an HTTP call (or equivalent), not a coding environment.
-- **Persist state outside the return value.** No local files, no env vars — the runner+registry handle all persistence.
-
-## Reference adapters
-
-| File | Status | Notes |
+| Field | Requirement | Meaning |
 |---|---|---|
-| [`http.mjs`](./http.mjs) | ✅ Shipped | POST a JSON payload, receive `{ agentId, branchName }`. Zero external API deps. Good starting point for any self-hosted or custom backend. |
-| [`cursor-api.mjs`](./cursor-api.mjs) | ✅ Shipped | Targets Cursor's Background Agents API (`POST /v0/agents`). Payload mirrors the current dashboard "Copy API payload" shape. |
-| `claude-code-remote.mjs` | ❌ Not shipped | Contract is the same; wire it against the Claude Code remote API when you install it. |
-| `codex-cloud.mjs` | ❌ Not shipped | Same. |
+| `repoFullName` | non-empty string | Provider/VCS repository identity such as `owner/repo`. |
+| `ticketFile` | non-empty relative path | Ticket the agent must read. |
+| `suggestedBranch` | non-empty string | Preferred head branch; it may come from an earlier registry mapping. |
+| `baseBranch` | non-empty string | PR target branch. |
+| `model` | non-empty string | `default` or backend-specific model identifier. |
+| `prompt` | string | Fully composed agent instructions. Treat as potentially sensitive data. |
+| `idempotencyKey` | lowercase SHA-256 hex | Stable for repository identity, ticket path, and exact ticket content. |
 
-## Adding a new adapter
+An adapter MUST forward all semantics its provider can express. When the provider has no separate runtime-input fields, the adapter MAY prepend them to the prompt.
 
-1. Create `action/src/adapters/<name>.mjs`.
-2. Export a factory: `export function create<Name>Adapter({ /* backend-specific config */, fetchImpl })`.
-3. Return an object with `{ backend: "<name>", async dispatch(input) { ... } }`.
-4. Make sure the promise resolves to `{ agentId, branchName }` — both non-empty strings.
-5. Wire it in [`action/src/index.mjs`](../index.mjs) by mapping the `agent-backend` input value `"<name>"` to your factory.
-6. Add tests under [`internal/tests/`](../../../internal/tests/) using a mocked `fetchImpl`.
+### Result
 
-That's the whole surface. No hidden hooks, no lifecycle events, no callbacks — just dispatch and return.
+- `agentId` MUST be a non-empty string suitable for correlation in logs.
+- `branchName` MUST be a non-empty string and SHOULD be the actual provider branch.
+- An adapter MUST NOT silently replace a present but invalid provider value with the suggestion. A fallback is acceptable only when the provider contract explicitly guarantees it honored `suggestedBranch`.
+
+The runner checkpoints `branchName`; returning the wrong value can cause repeat dispatch.
+
+## At-least-once and idempotency
+
+Calling `dispatch` means “request one remote execution,” not “prove one execution exists.” Network ambiguity, workflow cancellation, or a slow provider can produce a successful remote agent after the local call failed.
+
+- The runner supplies the same `idempotencyKey` for the same ticket content.
+- Adapters SHOULD use the provider's native idempotency mechanism.
+- HTTP receivers SHOULD persist and deduplicate this key for an operationally appropriate window.
+- Adapters MUST NOT blindly retry a dispatch POST unless the remote endpoint documents idempotent handling for that key.
+- Operators must inspect remote provider state and open PRs before manual retry after a timeout.
+
+## Timeouts and errors
+
+Factories receive a request timeout derived from `request-timeout-seconds` (reference default `120`). Every network request MUST have a finite timeout.
+
+Throw an `Error` for:
+
+- missing credentials/configuration;
+- timeout or network failure;
+- non-success HTTP response;
+- invalid JSON;
+- missing or invalid result fields.
+
+Errors SHOULD identify backend, operation, and status without including credentials, HMAC material, full prompts, or ticket content. The runner records a failed attempt, and that attempt consumes cycle capacity.
+
+## Generic HTTP wire contract
+
+The shipped HTTP adapter POSTs JSON to the configured receiver:
+
+```json
+{
+  "repo": "owner/repo",
+  "ticket_file": "tickets/example.md",
+  "suggested_branch": "rondo/example",
+  "base_branch": "main",
+  "model": "default",
+  "prompt": "...",
+  "idempotency_key": "<sha256-hex>"
+}
+```
+
+Required headers:
+
+```text
+Content-Type: application/json
+Idempotency-Key: <sha256-hex>
+```
+
+When `RONDO_HTTP_SECRET` is configured, the adapter also sends:
+
+```text
+X-Rondo-Timestamp: <unix-seconds>
+X-Rondo-Signature: sha256=<hmac-hex>
+```
+
+The signature is HMAC-SHA256 over the UTF-8 bytes of:
+
+```text
+<timestamp>.<exact-request-body>
+```
+
+The receiver MUST recompute the HMAC over the exact bytes received, compare in constant time, and reject timestamps outside a short configured replay window. HMAC authenticates the sender and body; it does not encrypt them. HTTPS remains mandatory unless an operator explicitly sets `http-allow-insecure: true` for a controlled environment.
+
+Accepted response field spellings are implementation-defined but the normalized result is always:
+
+```json
+{
+  "agentId": "remote-id",
+  "branchName": "actual/head-branch"
+}
+```
+
+Document any aliases a receiver relies on and reject empty, non-string normalized values.
+
+## Cursor reference adapter
+
+The Cursor adapter sends the repository URL, base branch, requested model when non-default, and a prompt containing runtime inputs. It asks Cursor to create the PR through the Cursor GitHub App.
+
+Cursor is an external evolving API. Payload compatibility must be covered by mocked contract tests and verified in a controlled smoke repository before release. Do not describe it as provider-independent or permanently stable.
+
+## Required tests for a new adapter
+
+At minimum:
+
+- valid request and exact normalized result;
+- missing configuration/credential;
+- timeout/abort;
+- non-2xx and invalid JSON;
+- missing, empty, and wrong-type result fields;
+- idempotency propagation;
+- no blind POST retry;
+- secret/header redaction in errors;
+- provider-generated branch handling;
+- HTTP-only: HTTPS rejection/opt-in and deterministic HMAC verification.
+
+Wire a new adapter into configuration only after its name, secret/data requirements, installation steps, security notes, and tests exist.

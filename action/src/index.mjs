@@ -1,62 +1,141 @@
 // Entry point for the reusable GitHub Action. Wires env → config → runner.
-//
-// Zero-config by design: every runtime knob comes from action inputs (exposed
-// in action.yml, passed via `with:` in the host-repo workflow). GitHub Actions
-// forwards each input as the env var `INPUT_<NAME>` where <NAME> is upper-kebab
-// with dashes turned into underscores (e.g. `tickets-dir` → `INPUT_TICKETS_DIR`).
 
-import { createGhClient } from "./vcs/gh-client.mjs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
 import { createCursorAdapter } from "./adapters/cursor-api.mjs";
 import { createHttpAdapter } from "./adapters/http.mjs";
 import { runCycle } from "./core/runner.mjs";
+import {
+  assertValidBranchName,
+  assertValidBranchPrefix,
+  assertValidModel,
+  assertValidRelativeDirectory,
+  assertValidRepoFullName,
+  validateHttpEndpoint,
+} from "./lib/validation.mjs";
+import { createGhClient } from "./vcs/gh-client.mjs";
 
-/** Read an action input. GitHub Actions sets `INPUT_<UPPER_SNAKE>` for each. */
-function input(name, fallback = "") {
-  const key = `INPUT_${name.replace(/-/g, "_").toUpperCase()}`;
-  const v = process.env[key];
-  return v === undefined || v === "" ? fallback : v;
-}
+const SUPPORTED_BACKENDS = new Set([
+  "cursor-api",
+  "http",
+  "claude-code-remote",
+  "codex-cloud",
+]);
 
 /**
- * Build the runner config from action inputs. The shape matches what
- * core/runner.mjs expects. Keep this the only place where input names are read.
+ * Read an Action input from the environment.
+ *
+ * GitHub uppercases input ids and preserves dashes (`dry-run` becomes
+ * `INPUT_DRY-RUN`). The underscore key is accepted as a local/legacy alias.
  */
-function readConfig() {
-  const agentBackend = input("agent-backend", "cursor-api");
-  const httpUrl = input("http-url", "");
-  if (agentBackend === "http" && !httpUrl) {
+export function input(name, fallback = "", env = process.env) {
+  const githubKey = `INPUT_${name.replace(/ /g, "_").toUpperCase()}`;
+  const underscoreAlias = githubKey.replace(/-/g, "_");
+  for (const key of githubKey === underscoreAlias ? [githubKey] : [githubKey, underscoreAlias]) {
+    const value = env[key];
+    if (value !== undefined && value !== "") return value;
+  }
+  return fallback;
+}
+
+function booleanInput(name, fallback, env) {
+  const value = String(input(name, String(fallback), env)).trim().toLowerCase();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`${name} must be either "true" or "false".`);
+}
+
+function integerInput(name, fallback, env, { min, max }) {
+  const raw = String(input(name, String(fallback), env)).trim();
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  }
+  return value;
+}
+
+/** Build and validate the runner config from Action inputs. */
+export function readConfig({ env = process.env } = {}) {
+  const dryRun = booleanInput("dry-run", false, env);
+  const ticketsDir = String(input("tickets-dir", "tickets", env)).trim();
+  const branchPrefix = String(input("branch-prefix", "rondo/", env)).trim();
+  const baseBranch = String(input("base-branch", "main", env)).trim();
+  const agentBackend = String(input("agent-backend", "cursor-api", env)).trim();
+  const acceptedRaw = String(input("accepted-models", "", env)).trim();
+  const httpUrlRaw = String(input("http-url", "", env)).trim();
+  const httpAllowInsecure = booleanInput("http-allow-insecure", false, env);
+  const maxDispatchesPerCycle = integerInput("max-dispatches-per-cycle", 10, env, {
+    min: 1,
+    max: 1_000,
+  });
+  const requestTimeoutSeconds = integerInput("request-timeout-seconds", 120, env, {
+    min: 1,
+    max: 3_600,
+  });
+
+  assertValidRelativeDirectory(ticketsDir);
+  assertValidBranchPrefix(branchPrefix);
+  assertValidBranchName(baseBranch, "base-branch");
+  if (!SUPPORTED_BACKENDS.has(agentBackend)) {
     throw new Error(
-      `agent-backend is "http" but http-url is empty. Set 'with: http-url: ...' in your workflow.`,
+      `Unknown agent-backend "${agentBackend}". Expected one of: ${[...SUPPORTED_BACKENDS].join(", ")}.`,
     );
   }
-  const acceptedRaw = input("accepted-models", "");
+
   const acceptedModels = acceptedRaw
-    ? acceptedRaw.split(",").map((s) => s.trim()).filter(Boolean)
+    ? acceptedRaw.split(",").map((model) => model.trim()).filter(Boolean)
     : undefined;
+  for (const model of acceptedModels ?? []) assertValidModel(model, "accepted-models entry");
+
+  let httpUrl;
+  if (agentBackend === "http") {
+    if (!httpUrlRaw) {
+      throw new Error(
+        `agent-backend is "http" but http-url is empty. Set 'with: http-url: ...' in your workflow.`,
+      );
+    }
+    httpUrl = validateHttpEndpoint(httpUrlRaw, { allowInsecure: httpAllowInsecure });
+  } else if (httpAllowInsecure) {
+    throw new Error("http-allow-insecure can only be true when agent-backend is http.");
+  }
 
   return {
-    ticketsDir: input("tickets-dir", "tickets"),
-    branchPrefix: input("branch-prefix", "rondo/"),
-    baseBranch: input("base-branch", "main"),
+    dryRun,
+    ticketsDir,
+    branchPrefix,
+    baseBranch,
     agentBackend,
     acceptedModels,
-    httpUrl: httpUrl || undefined,
+    httpUrl,
+    httpAllowInsecure,
+    maxDispatchesPerCycle,
+    requestTimeoutMs: requestTimeoutSeconds * 1_000,
   };
 }
 
-/**
- * Build the adapter named by `config.agentBackend`. The only env-dependent
- * part of the runner — everything else is generic. Adapters must conform to
- * [adapters/CONTRACT.md](./adapters/CONTRACT.md): dispatch(...) → { agentId, branchName }.
- */
-function createAdapter(config) {
+/** Build the configured backend adapter. */
+export function createAdapter(
+  config,
+  { env = process.env, fetchImpl = globalThis.fetch } = {},
+) {
   switch (config.agentBackend) {
     case "cursor-api":
-      return createCursorAdapter({ apiKey: process.env.CURSOR_API_KEY });
+      return createCursorAdapter({
+        apiKey: env.CURSOR_API_KEY,
+        requestTimeoutMs: config.requestTimeoutMs,
+        fetchImpl,
+      });
     case "http":
       return createHttpAdapter({
         url: config.httpUrl,
-        secret: process.env.RONDO_HTTP_SECRET,
+        secret: env.RONDO_HTTP_SECRET,
+        allowInsecure: config.httpAllowInsecure,
+        requestTimeoutMs: config.requestTimeoutMs,
+        fetchImpl,
       });
     case "claude-code-remote":
     case "codex-cloud":
@@ -66,46 +145,75 @@ function createAdapter(config) {
         `and have your infrastructure forward the dispatch to ${config.agentBackend}.`,
       );
     default:
-      throw new Error(
-        `Unknown agent-backend "${config.agentBackend}". Expected one of: cursor-api, http, ` +
-        `claude-code-remote, codex-cloud.`,
-      );
+      throw new Error(`Unknown agent-backend "${config.agentBackend}".`);
   }
 }
 
-async function main() {
-  const repoRoot = process.env.GITHUB_WORKSPACE || process.cwd();
-  const dryRun = input("dry-run", "false") === "true";
+/** Run one Action cycle and return the desired process exit code. */
+export async function main({
+  env = process.env,
+  cwd = process.cwd(),
+  fetchImpl = globalThis.fetch,
+  nowImpl = () => new Date(),
+  log = console.log,
+  ghFactory = createGhClient,
+  adapterFactory = createAdapter,
+  runCycleImpl = runCycle,
+} = {}) {
+  const config = readConfig({ env });
+  const repoRoot = env.GITHUB_WORKSPACE || cwd;
+  const repoFullName = env.GITHUB_REPOSITORY;
+  assertValidRepoFullName(repoFullName, "GITHUB_REPOSITORY");
+  const [owner, repo] = repoFullName.split("/");
 
-  const config = readConfig();
+  const gh = ghFactory({
+    token: env.GH_TOKEN,
+    owner,
+    repo,
+    requestTimeoutMs: config.requestTimeoutMs,
+    fetchImpl,
+  });
 
-  const [owner, repo] = (process.env.GITHUB_REPOSITORY || "owner/repo").split("/");
-  const gh = createGhClient({ token: process.env.GH_TOKEN, owner, repo });
-  const adapter = createAdapter(config);
+  // Dry-run performs GitHub reads but cannot dispatch, so backend credentials
+  // are deliberately not required and no adapter is instantiated.
+  const adapter = config.dryRun
+    ? null
+    : adapterFactory(config, { env, fetchImpl });
 
-  const today = new Date().toISOString().slice(0, 10);
+  const now = nowImpl();
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
+    throw new Error("nowImpl must return a valid Date.");
+  }
 
-  const result = await runCycle({
+  const result = await runCycleImpl({
     config,
     gh,
     adapter,
     repoRoot,
-    repoFullName: `${owner}/${repo}`,
-    dryRun,
-    today,
+    repoFullName,
+    dryRun: config.dryRun,
+    today: now.toISOString().slice(0, 10),
+    log,
   });
 
-  console.log(
+  log(
     `cycle done — dispatched ${result.dispatched.length}, ` +
     `skipped ${result.skipped.length}, failed ${result.failed.length}`,
   );
-  if (result.failed.length > 0) {
-    // Non-zero exit so the Action run shows red and on-call notices.
-    process.exit(2);
-  }
+  return result.failed.length > 0 ? 2 : 0;
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+export function isDirectExecution(metaUrl = import.meta.url, argv1 = process.argv[1]) {
+  return Boolean(argv1) && metaUrl === pathToFileURL(resolve(argv1)).href;
+}
+
+if (isDirectExecution()) {
+  main()
+    .then((exitCode) => {
+      process.exitCode = exitCode;
+    })
+    .catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
+}

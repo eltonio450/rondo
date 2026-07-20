@@ -1,14 +1,15 @@
 {
   "name": "rondo-action",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Reusable GitHub Action: the Rondo runner.",
   "type": "module",
   "license": "MIT",
   "private": true,
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "scripts": {
-    "test": "node --test '../internal/tests/*.test.mjs'"
+    "test": "node --test '../internal/tests/*.test.mjs'",
+    "test:coverage": "node --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=90 --test '../internal/tests/*.test.mjs'"
   }
 }

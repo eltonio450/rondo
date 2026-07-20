@@ -4,6 +4,15 @@
 
 const KEY_RE = /^([a-z_]+):\s*(.+)$/;
 
+export function isIsoCalendarDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  if (month < 1 || month > 12 || day < 1) return false;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day <= daysInMonth[month - 1];
+}
+
 export function parseFrontmatter(content) {
   const lines = content.split(/\r?\n/);
   const frontmatter = {};
@@ -15,7 +24,15 @@ export function parseFrontmatter(content) {
     const m = line.match(KEY_RE);
     if (!m) break;
     const [, key, rawValue] = m;
-    frontmatter[key] = coerce(rawValue.trim());
+    // Define keys explicitly instead of assigning through Object.prototype.
+    // This preserves valid extension keys such as `__proto__` as inert data
+    // rather than invoking the legacy prototype setter.
+    Object.defineProperty(frontmatter, key, {
+      value: coerce(rawValue.trim()),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
     order.push(key);
   }
   // Skip the blank line separating frontmatter from body, if present.
@@ -33,7 +50,7 @@ export function serializeFrontmatter({ frontmatter, order, body }) {
   const lines = [];
   for (const key of keys) {
     if (seen.has(key)) continue;
-    if (!(key in frontmatter)) continue;
+    if (!Object.hasOwn(frontmatter, key)) continue;
     seen.add(key);
     lines.push(`${key}: ${stringify(frontmatter[key])}`);
   }

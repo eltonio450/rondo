@@ -7,7 +7,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseFrontmatter } from "../lib/frontmatter.mjs";
+import { isIsoCalendarDate, parseFrontmatter } from "../lib/frontmatter.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -51,6 +51,9 @@ function validateValue(value, schema, path) {
       errors.push(`${path}: does not match /${schema.pattern}/`);
     }
   }
+  if (schema.format === "date" && typeof value === "string" && !isIsoCalendarDate(value)) {
+    errors.push(`${path}: must be a real calendar date in YYYY-MM-DD form`);
+  }
   if ("minimum" in schema && typeof value === "number" && value < schema.minimum) {
     errors.push(`${path}: must be >= ${schema.minimum}`);
   }
@@ -89,10 +92,100 @@ export function validateTicketFile(filename, content, schema = loadSchema()) {
   }
   const { frontmatter } = parseFrontmatter(content);
   errors.push(...validateFrontmatter(frontmatter, schema));
+  if (SLUG_FILE_RE.test(filename) && typeof frontmatter.depends === "string") {
+    const slug = filename.slice(0, -3);
+    if (dependencySlugs(frontmatter.depends).includes(slug)) {
+      errors.push(`depends: ticket \`${slug}\` cannot depend on itself`);
+    }
+  }
   return errors;
 }
 
-function main(argv) {
+function dependencySlugs(depends) {
+  return depends
+    .split(",")
+    .map((value) => value.trim().replace(/\.md$/, ""))
+    .filter(Boolean);
+}
+
+/**
+ * Validate a complete queue, including graph constraints that cannot be
+ * checked one file at a time.
+ *
+ * @param {Array<{filename: string, content: string}>} ticketFiles
+ * @returns {Array<{filename: string, errors: string[]}>}
+ */
+export function validateTicketSet(ticketFiles, schema = loadSchema()) {
+  const results = ticketFiles.map(({ filename, content }) => ({
+    filename,
+    errors: validateTicketFile(filename, content, schema),
+  }));
+  const resultByFilename = new Map(results.map((result) => [result.filename, result]));
+  const nodes = new Map();
+
+  for (const { filename, content } of ticketFiles) {
+    if (!SLUG_FILE_RE.test(filename)) continue;
+    const slug = filename.slice(0, -3);
+    const { frontmatter } = parseFrontmatter(content);
+    const dependencies =
+      typeof frontmatter.depends === "string" ? dependencySlugs(frontmatter.depends) : [];
+    nodes.set(slug, { filename, dependencies });
+  }
+
+  // Tarjan strongly-connected components. An SCC with more than one ticket is
+  // a dependency cycle and can never become eligible under delete-to-complete
+  // semantics. Self-dependencies are reported by validateTicketFile above.
+  let nextIndex = 0;
+  const indexes = new Map();
+  const lowLinks = new Map();
+  const stack = [];
+  const onStack = new Set();
+  const components = [];
+
+  function visit(slug) {
+    indexes.set(slug, nextIndex);
+    lowLinks.set(slug, nextIndex);
+    nextIndex += 1;
+    stack.push(slug);
+    onStack.add(slug);
+
+    for (const dependency of nodes.get(slug).dependencies) {
+      if (dependency === slug || !nodes.has(dependency)) continue;
+      if (!indexes.has(dependency)) {
+        visit(dependency);
+        lowLinks.set(slug, Math.min(lowLinks.get(slug), lowLinks.get(dependency)));
+      } else if (onStack.has(dependency)) {
+        lowLinks.set(slug, Math.min(lowLinks.get(slug), indexes.get(dependency)));
+      }
+    }
+
+    if (lowLinks.get(slug) !== indexes.get(slug)) return;
+    const component = [];
+    let member;
+    do {
+      member = stack.pop();
+      onStack.delete(member);
+      component.push(member);
+    } while (member !== slug);
+    components.push(component);
+  }
+
+  for (const slug of [...nodes.keys()].sort()) {
+    if (!indexes.has(slug)) visit(slug);
+  }
+
+  for (const component of components.filter((members) => members.length > 1)) {
+    const members = component.sort();
+    const message = `depends: dependency cycle detected among: ${members.join(", ")}`;
+    for (const slug of members) {
+      resultByFilename.get(nodes.get(slug).filename).errors.push(message);
+    }
+  }
+
+  return results;
+}
+
+export function main(argv) {
   const ticketsDir = resolve(argv[2] || "tickets");
   let files;
   try {
@@ -100,6 +193,10 @@ function main(argv) {
       .filter((f) => f.endsWith(".md"))
       .sort();
   } catch (e) {
+    if (e.code === "ENOENT") {
+      console.log(`rondo-validate: no tickets in ${ticketsDir} — nothing to validate.`);
+      return 0;
+    }
     console.error(`rondo-validate: cannot read ${ticketsDir}: ${e.message}`);
     return 2;
   }
@@ -108,10 +205,19 @@ function main(argv) {
     return 0;
   }
   const schema = loadSchema();
+  let ticketFiles;
+  try {
+    ticketFiles = files.map((filename) => ({
+      filename,
+      content: readFileSync(join(ticketsDir, filename), "utf8"),
+    }));
+  } catch (e) {
+    console.error(`rondo-validate: cannot read a ticket in ${ticketsDir}: ${e.message}`);
+    return 2;
+  }
+  const results = validateTicketSet(ticketFiles, schema);
   let failed = 0;
-  for (const filename of files) {
-    const content = readFileSync(join(ticketsDir, filename), "utf8");
-    const errors = validateTicketFile(filename, content, schema);
+  for (const { filename, errors } of results) {
     if (errors.length > 0) {
       failed++;
       console.error(`✗ ${filename}`);

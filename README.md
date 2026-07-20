@@ -15,20 +15,72 @@ It is a foundation to adapt, not a hosted control plane. GitHub, the scheduler, 
 
 ## The loop
 
-```text
-Ticket on the base branch
-          |
-          v
-Eligibility check ----- ineligible -----> Skip this cycle
-          |
-          | eligible and below cycle cap
-          v
-Dispatch through an adapter ------------> Persist slug-to-branch mapping
-          |
-          v
-Remote coding agent ---> One PR + ticket update ---> Human review and merge
-          ^                                                   |
-          +-------------------- next cycle -------------------+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#F8FAFC', 'primaryBorderColor': '#F8FAFC', 'primaryTextColor': '#0F172A', 'lineColor': '#94A3B8', 'fontSize': '14px', 'fontFamily': 'system-ui, -apple-system, sans-serif' }}}%%
+flowchart TD
+    subgraph FILES["📁 <b>tickets/</b> (in your repository)"]
+        direction LR
+        F1["task-a.md"]
+        F2["task-b.md"]
+        F3["task-c.md"]
+    end
+
+    AUTHOR["👤 <b>A developer creates a .md ticket</b><br/><i>mission, steps, constraints, and decisions</i>"]
+    AUTHOR --> FILES
+
+    FILES -->|"on each scheduled cycle,<br/>every file is scanned"| CHECK
+    CHECK{"Is the ticket<br/>eligible?"}
+    CHECK -->|"invalid, paused, blocked,<br/>or matching PR already open"| SKIP["⏸ <b>Skipped</b><br/><i>wait for a later cycle</i>"]
+    CHECK -->|"eligible"| CAP{"Below the<br/>cycle cap?"}
+    CAP -->|"no"| SKIP
+    CAP -->|"yes"| DISPATCH
+
+    DISPATCH["🔌 <b>Dispatch through an adapter</b><br/><i>Cursor, HTTP, or a host-specific port</i>"]
+    DISPATCH --> START["🤖 <b>A remote coding agent starts</b><br/><i>with the ticket, prompt, and base branch</i>"]
+    START --> REGISTRY["🧭 <b>Checkpoint the returned branch</b><br/><i>persist ticket slug → actual branch</i>"]
+
+    subgraph AGENT["Agent work (one relevant PR requested)"]
+        direction TB
+        READ["📖 <b>Read the .md ticket</b><br/><i>mission, remaining steps,<br/>history, and decisions</i>"]
+        DECIDE{"What should happen<br/>this cycle?"}
+        CODE["💻 <b>(a) Progress</b><br/><i>code changes + ticket update</i>"]
+        PAUSE_OUT["⏸ <b>(b) Pause</b><br/><i>record why and set paused:</i>"]
+        DONE_OUT["🏁 <b>(c) Done</b><br/><i>promote knowledge and remove the ticket</i>"]
+        NOOP["🚧 <b>(d) No-op</b><br/><i>record the blocker</i>"]
+        PR["🔀 <b>Create or reuse one relevant PR</b><br/><i>carry the code and ticket update together</i>"]
+        READ --> DECIDE
+        DECIDE --> CODE
+        DECIDE --> PAUSE_OUT
+        DECIDE --> DONE_OUT
+        DECIDE --> NOOP
+        CODE --> PR
+        PAUSE_OUT --> PR
+        DONE_OUT --> PR
+        NOOP --> PR
+    end
+
+    START --> READ
+    PR --> REVIEW
+
+    REVIEW["👤 <b>Human review</b>"]
+    REVIEW -->|"requests changes"| CODE
+    REVIEW -->|"approves &amp; merges"| MERGED
+
+    MERGED["✅ <b>PR merged into the base branch</b><br/><i>the ticket now carries<br/>the durable project history</i>"]
+    MERGED --> DONE_CHECK{"Any steps<br/>left?"}
+
+    DONE_CHECK -->|"yes"| NEXT["🔄 <b>Next scheduled cycle</b><br/><i>the agent re-reads the accumulated context<br/>and tackles the next reviewable step</i>"]
+    DONE_CHECK -->|"no — ticket removed"| DONE["🏁 <b>Ticket done</b><br/><i>the next cycle prunes its registry entry</i>"]
+    NEXT --> CHECK
+
+    %% Styling — soft pastel fills, no visible borders (stroke = fill)
+    style FILES fill:#FEF3C7,stroke:#FEF3C7,color:#713F12
+    style AGENT fill:#FFE4E6,stroke:#FFE4E6,color:#881337
+    style SKIP fill:#F1F5F9,stroke:#F1F5F9,color:#475569
+    style REGISTRY fill:#EDE9FE,stroke:#EDE9FE,color:#4C1D95
+    style DONE fill:#D1FAE5,stroke:#D1FAE5,color:#064E3B
+    style MERGED fill:#D1FAE5,stroke:#D1FAE5,color:#064E3B
+    style NEXT fill:#DBEAFE,stroke:#DBEAFE,color:#1E3A8A
 ```
 
 One ticket can therefore produce many PRs. A normal cycle asks the agent to choose one outcome:

@@ -15,16 +15,20 @@ It is a foundation to adapt, not a hosted control plane. GitHub, the scheduler, 
 
 ## The loop
 
-```mermaid
-flowchart LR
-    T["Ticket .md on the base branch"] --> E["Derive eligibility"]
-    E -->|"paused, blocked, invalid, or PR open"| S["Skip this cycle"]
-    E -->|"eligible and below cycle cap"| D["Dispatch through an adapter"]
-    D --> A["Remote coding agent"]
-    A --> P["Requested: one relevant PR + ticket update"]
-    P --> H["Human review and merge"]
-    H --> T
-    D --> R["Persist slug → branch mapping"]
+```text
+Ticket on the base branch
+          |
+          v
+Eligibility check ----- ineligible -----> Skip this cycle
+          |
+          | eligible and below cycle cap
+          v
+Dispatch through an adapter ------------> Persist slug-to-branch mapping
+          |
+          v
+Remote coding agent ---> One PR + ticket update ---> Human review and merge
+          ^                                                   |
+          +-------------------- next cycle -------------------+
 ```
 
 One ticket can therefore produce many PRs. A normal cycle asks the agent to choose one outcome:

@@ -7,7 +7,7 @@ description: Audit automated pull-request review quality—covering author-revie
 
 **Stage 5 of 7 — Build Your Software Factory**
 
-Once tickets dispatch automatically (Stage 3) and agents recover from routine blockers (Stage 4), human code review becomes the bottleneck. Stage 5 introduces an **independent** AI review gate: a separate reviewer context evaluates the exact pull-request `head_sha` against repository invariants and domain risk rules, filters out linter trivia, and publishes an evidence-backed advisory verdict (`MERGE_ADVICE`, `CHANGES_REQUESTED`, or `HUMAN_REVIEW`)—without holding permission to merge.
+Once your orchestrator automatically launches tasks into your cloud runtime (Stages 3–4), human code review becomes the bottleneck. Stage 5 introduces an **independent** automated PR review adapted to each PR: a fresh reviewer context evaluates the exact `head_sha` against repository invariants, sensitive-path checklists, and owner rules, filters out linter trivia, and publishes an evidence-backed advisory verdict (`MERGE_ADVICE`, `CHANGES_REQUESTED`, or `HUMAN_REVIEW`)—without holding permission to merge.
 
 Use this skill to audit existing PR review automation (or design a clean review gate from scratch) and recommend high-signal improvements.
 
@@ -62,7 +62,7 @@ Score each dimension as `Ready`, `Partial`, `Missing`, or `Unverified`:
 ## How to formulate recommendations
 
 - **Start with one generalist reviewer plus 1–3 high-risk specialists only where justified.** Only add a specialist lens (such as permissions/RBAC, migrations, or security) when historical regressions show a domain gap—and verify on held-out historical PRs that the specialist catches real bugs the generalist missed without inflating false blocks.
-- **Make the output contract dual-purpose: fast for humans, parseable for policy.** Recommend a compact human dossier at the top (verdict, `head_sha`, blast radius, test proof, findings by severity) plus a machine-readable JSON/check-run summary that Stage 6 (`rondo-auto-merge`) can verify deterministically without parsing freeform prose.
+- **Make the output contract dual-purpose: fast for humans, parseable for policy.** Recommend a compact human dossier at the top (verdict, `head_sha`, blast radius, test proof, findings by severity) plus a machine-readable JSON/check-run summary that Stage 6 (`rondo-merge-gate`) can verify deterministically without parsing freeform prose.
 - **Roll out in observation mode first.** Run silently or as a non-blocking comment on 10–20 real PRs, measure engineer agreement, latency, and cost per accepted PR, tighten noisy rules, and only then promote high-confidence checks.
 - **Account for Rondo's explicit boundary.** Rondo's `owner` frontmatter provides context, not GitHub reviewer assignment or AI review. Recommend wiring reviewer assignment (`CODEOWNERS` or owner mapping) alongside the Stage 5 workflow where human sign-off remains required.
 
@@ -107,7 +107,7 @@ Return the audit in this structure:
 - <1–2 traps to avoid—such as adding five unbenchmarked specialist agents or running `pull_request_target` on untrusted code.>
 
 ### Stage 5 exit gate
-<3–4 concrete proofs confirming every PR gets an independent, low-noise, SHA-pinned review dossier calibrated against real diffs before considering Stage 6 (`rondo-auto-merge`).>
+<3–4 concrete proofs confirming every PR gets an independent, low-noise, SHA-pinned review dossier calibrated against real diffs before considering Stage 6 (`rondo-merge-gate`).>
 ```
 
 End by offering to scaffold the `P0` review prompt, structured verdict schema, or historical-PR replay harness on a branch in non-blocking mode.

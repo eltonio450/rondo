@@ -2,35 +2,31 @@
 
 Standalone agent skills in this repository fall into two groups:
 
-1. **Build Your Software Factory (7 stages)** — read-only audit & action-plan skills that help any team move step by step from ad-hoc coding chats to an observable, autonomous delivery loop.
+1. **Build Your Software Factory (7 stages)** — concrete, read-only audit & build-plan skills taking an engineering team step by step from a local coding agent to an autonomous software factory.
 2. **Core Rondo operator skills** — install Rondo, author valid tickets, and resume stalled work.
 
-## Build Your Software Factory — 7 Audit & Recommendation Skills
+## Build Your Software Factory — 7 Skills
 
-Each skill is **self-contained, read-only by default, and structured as an Audit + Action Plan**: point your coding agent at one skill for your current stage, get an evidence-backed scorecard of your repository, and receive a prioritized list of concrete changes (`P0` blockers, `P1` hardening, and what *not* to build yet).
+Build these 7 capabilities in your environment, in order, and you have a real software factory. Each skill is **self-contained, read-only by default, and outputs a concrete Scorecard + Build Plan** (`P0` build now, `P1` hardening, and what *not* to build yet).
 
-| Stage | Skill | What it audits and recommends |
+| Stage | Skill | What you build in your environment |
 |---|---|---|
-| **1** | [`rondo-agent-ready`](rondo-agent-ready/SKILL.md) | Clean-checkout bootstrap, concise `AGENTS.md` / modular `skills/`, sub-2-minute local precheck, local-to-CI parity, and sensitive-path boundaries. |
-| **2** | [`rondo-ticket-contract`](rondo-ticket-contract/SKILL.md) | Direct runtime access to tasks (Git-native Rondo `tickets/<slug>.md`, external tracker CLI/API, or hybrid), executable ticket contract, 1-PR step sizing, and schema validation. |
-| **3** | [`rondo-dispatch-ticket`](rondo-dispatch-ticket/SKILL.md) | Serialized triggers, deterministic eligibility, concurrency caps, `ticket → branch` checkpointing, at-least-once duplicate protection, isolated sandboxes, and secret-free dry-runs. |
-| **4** | [`rondo-feedback-loop`](rondo-feedback-loop/SKILL.md) | Explicit run outcomes (`Progress`, `Pause`, `Needs feedback`, `Done`), structured human decision briefs on PRs, bounded CI/review repair, SHA-bound answers, and single-writer resume. |
-| **5** | [`rondo-review-gate`](rondo-review-gate/SKILL.md) | Author–reviewer context separation, domain-specialist routing, `file:line` evidence discipline, SHA-pinned `MERGE_ADVICE` vs `HUMAN_REVIEW` verdicts, and historical PR calibration. |
-| **6** | [`rondo-auto-merge`](rondo-auto-merge/SKILL.md) | Deterministic policy-as-code over `head_sha`, hard blast-radius exclusions (migrations, auth, secrets, CI/policy self-edits), Rondo inter-step pause invariants, rollback, and kill switch. |
-| **7** | [`rondo-production-observability`](rondo-production-observability/SKILL.md) | Commit-to-release telemetry lineage, post-deploy baseline/SLO verification windows, fast containment/rollback, deduplicated regression-to-ticket creation, and swarm readiness. |
+| **1** | [`rondo-local-agent`](rondo-local-agent/SKILL.md) | **Local agent end-to-end:** paste a task to a local agent, and it builds, verifies locally (<2 min), opens a PR, watches CI/review feedback, and follows it through to merge. |
+| **2** | [`rondo-ticket-access`](rondo-ticket-access/SKILL.md) | **Ticketing system access:** connect Linear, Notion, GitHub Issues, Jira, or Git tickets directly to your agent so it reads specs and updates status without manual copy-paste. |
+| **3** | [`rondo-cloud-runtime`](rondo-cloud-runtime/SKILL.md) | **Cloud runtime:** run the exact same working loop in an isolated cloud VM/container/sandbox—with Git, CI, ticketing, dependencies, secrets, timeouts, and logs working when your laptop is closed. |
+| **4** | [`rondo-orchestrator`](rondo-orchestrator/SKILL.md) | **Orchestrator:** automatically launch ready tasks into your cloud runtime without pressing Enter (e.g. Rondo), tracking `ticket → branch`, capping concurrency, and pausing/resuming cleanly. |
+| **5** | [`rondo-review-gate`](rondo-review-gate/SKILL.md) | **Automated PR review:** an independent AI reviewer adapted to each PR's scope, risk paths, and owner—flagging real issues with `file:line` evidence and advising without merging. |
+| **6** | [`rondo-merge-gate`](rondo-merge-gate/SKILL.md) | **Explicit merge gate:** testable, rule-based merge criteria on the current commit—safe changes auto-merge; critical paths (DB, auth, billing, secrets, CI rules) stay human; instant kill switch. |
+| **7** | [`rondo-external-swarms`](rondo-external-swarms/SKILL.md) | **External triggers & swarms:** connect prod bugs, degrading metrics, or alerts to split work into sub-problems and launch parallel agent swarms under baselines, budgets, and rollback-first safety. |
 
 ### How to run any stage
 
-1. **Direct prompt with URL or file path** (in Claude Code, Codex, Cursor, OpenCode, or Pi):
+1. **Direct prompt with URL or file path** (Claude Code, Codex, Cursor, OpenCode, or Pi):
    ```text
    Read <URL-or-path-to-SKILL.md> and run this audit on our repository.
-   Stay read-only, cite exact files and workflows, and give me the prioritized action plan.
+   Stay read-only, cite exact files and workflows, and give me the prioritized build plan.
    ```
 2. **Installed repository skill:** copy `<skill-name>/SKILL.md` into `skills/<skill-name>/SKILL.md` (or `.claude/skills/` / `.cursor/skills/`) so anyone on the team can invoke it as `/<skill-name>`.
-
-### Why swarms come after Stage 7
-
-Parallel agent swarms only compound value once a single-agent loop can verify changes locally (1), read bounded tasks (2), dispatch safely (3), pause on ambiguity (4), review independently (5), enforce deterministic merge boundaries (6), and observe production outcomes (7). With those seven loops in place, a swarm becomes an extension: multiple agents optimizing a measurable target against a pinned baseline, a hard budget, and automatic rollback.
 
 ## Core Rondo Operator Skills
 
